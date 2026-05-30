@@ -8,12 +8,13 @@ from dataclasses import dataclass, field
 from pke.db.sqlite import SQLiteStore
 from pke.evidence.models import iso_utc, new_ulid
 from pke.extraction.llm_client import LLMClient, LocalClient
+from pke.extraction.prompts import render as render_prompt
 from pke.extraction.schema import POLARITY_TO_EVIDENCE_KIND, ExtractedSkill, ExtractedSpan, Polarity
 
-SYSTEM_HEADER = """You are a knowledge engine extractor.
-Output strict JSON only. Extract cognitive skills the user outsourced,
-attempted, failed, asked about, or demonstrated. Use polarity values:
-demonstrated, attempted, failed, asked-about. Confidence must be 0..1."""
+# The extraction system prompt is static, large, and reused on every LLM call
+# in this layer. Render it once at import so the same string is sent every time
+# and Anthropic's prompt cache stays warm.
+SYSTEM_PROMPT = render_prompt("extract_skills.system.j2")
 
 
 def parse_extracted_skills(payload: dict[str, object]) -> list[ExtractedSkill]:
@@ -54,7 +55,8 @@ class ExtractionRunner:
 
     async def extract_text(self, text: str) -> list[ExtractedSkill]:
         """Extract skills from raw text."""
-        payload = await self.client.complete_json(system=SYSTEM_HEADER, user=text)
+        user_prompt = render_prompt("extract_skills.user.j2", evidence_text=text)
+        payload = await self.client.complete_json(system=SYSTEM_PROMPT, user=user_prompt)
         return parse_extracted_skills(payload)
 
     async def extract_pending(self, *, limit: int = 100) -> int:
