@@ -381,3 +381,26 @@ def test_hlr_extract_features_emits_canonical_layout():
     assert vec[6] == 0.0
     # has_parent must be 1
     assert vec[7] == 1.0
+
+
+async def test_resolver_writes_micro_cluster_id_when_online_clusterer_provided(app):
+    """IdentityResolver writes DenStream's cluster id to skill_candidates."""
+    from pke.identity.denstream_online import OnlineClusterer
+
+    app.evidence.add(build_manual_event(user="How do I configure FastAPI routes?"))
+    await ExtractionRunner(sqlite=app.sqlite, client=MockLLMClient()).extract_pending()
+    resolver = IdentityResolver(
+        sqlite=app.sqlite,
+        embedder=Embedder(),
+        ann=AnnIndex(),
+        online_clusterer=OnlineClusterer(),
+    )
+    decisions = resolver.resolve_pending()
+    assert decisions
+    rows = app.sqlite.conn.execute("SELECT micro_cluster_id FROM skill_candidates").fetchall()
+    assert rows
+    # DenStream returns int cluster ids (>= 0) once it has seen enough samples;
+    # for a single sample the id may be -1 which is the river "unassigned"
+    # sentinel. Either way the column must not be NULL when an OnlineClusterer
+    # is wired in.
+    assert all(row["micro_cluster_id"] is not None for row in rows)

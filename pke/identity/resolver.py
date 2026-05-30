@@ -12,6 +12,7 @@ from pke.evidence.models import iso_utc, new_ulid
 from pke.extraction.llm_client import LLMClient
 from pke.extraction.prompts import render as render_prompt
 from pke.identity.ann_index import AnnIndex
+from pke.identity.denstream_online import OnlineClusterer
 from pke.identity.embedder import Embedder
 
 
@@ -68,6 +69,7 @@ class IdentityResolver:
     embedder: Embedder
     ann: AnnIndex
     judge_client: LLMClient | None = field(default=None)
+    online_clusterer: OnlineClusterer | None = field(default=None)
     merge_threshold: float = 0.92
     gray_lower: float = 0.78
     legacy_merge_threshold: float = 0.86
@@ -96,6 +98,9 @@ class IdentityResolver:
         nearest = self.ann.search(vector, k=1)
         nearest_id = nearest[0][0] if nearest else None
         nearest_sim = nearest[0][1] if nearest else 0.0
+        micro_cluster_id = (
+            self.online_clusterer.partial_fit(vector) if self.online_clusterer is not None else None
+        )
 
         action, skill_id, judge_triggered = self._decide(
             candidate_name=candidate_name,
@@ -110,10 +115,11 @@ class IdentityResolver:
         self.sqlite.conn.execute(
             """
             UPDATE skill_candidates
-            SET resolved_skill_id = ?, resolution_state = ?, embedding = ?
+            SET resolved_skill_id = ?, resolution_state = ?, embedding = ?,
+                micro_cluster_id = ?
             WHERE id = ?
             """,
-            (skill_id, resolution_state, vector_to_blob(vector), row["id"]),
+            (skill_id, resolution_state, vector_to_blob(vector), micro_cluster_id, row["id"]),
         )
         if skill_id is not None and action != "pending":
             self.sqlite.conn.execute(
