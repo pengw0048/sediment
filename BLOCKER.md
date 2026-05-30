@@ -619,3 +619,8 @@ audit workflow 复审 prompt：参考 `~/sediment_audit.md` 顶部 `COMMON_INSTR
 - 影响：B20 CI 真 `uv sync --all-extras`；B8 py-fsrs 接入。
 - 你的倾向：选 A：继续用 `fsrs>=4,<5` 作为最接近 spec 的可安装 4.x 包；`py-fsrs` 是项目名，但 PyPI/module 名是 `fsrs`，且 `uv add 'fsrs>=4.5,<5'` 实测无解（只有 `<4.5` 或 `>=5`）。
 - 默认动作（如果用户不答）：PR-2 用 `fsrs==4.1.2` 的真实 `Scheduler` / `Card` / `Rating` API 删除 toy scheduler；后续若上游发布 4.5.x 再收紧 pin。
+
+### Q-2: B15 llama-cpp-python 0.3.23 lacks chat_template_kwargs
+- 影响：B15 本地 Qwen3 `enable_thinking=False` 强约束。
+- 你的倾向：选 A：删掉 hand-rolled LocalClient，真实加载 `llama_cpp.Llama`；如果当前 llama-cpp-python API 不能传 `chat_template_kwargs={"enable_thinking": False}`，就显式 raise，避免静默违反 spec。
+- 默认动作（如果用户不答）：PR-2 保留 LocalClient 接口但不提供不等价 fallback；后续在 llama-cpp-python 暴露该参数或改用支持 Qwen3 thinking flag 的 chat handler 后接通。

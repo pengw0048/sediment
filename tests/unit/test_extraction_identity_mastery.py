@@ -9,11 +9,12 @@ from pke.identity.embedder import Embedder
 from pke.identity.resolver import IdentityResolver
 from pke.mastery.hlr import HLR
 from pke.mastery.state import MasteryUpdater
+from pke.testing import MockLLMClient
 
 
 async def test_extraction_persists_candidates(app):
     app.evidence.add(build_manual_event(user="How do I configure FastAPI routes?"))
-    count = await ExtractionRunner(sqlite=app.sqlite).extract_pending()
+    count = await ExtractionRunner(sqlite=app.sqlite, client=MockLLMClient()).extract_pending()
     rows = app.sqlite.conn.execute("SELECT * FROM skill_candidates").fetchall()
     assert count == 1
     assert rows
@@ -22,7 +23,7 @@ async def test_extraction_persists_candidates(app):
 
 async def test_identity_resolves_to_skill_node(app):
     app.evidence.add(build_manual_event(user="How do I configure FastAPI routes?"))
-    await ExtractionRunner(sqlite=app.sqlite).extract_pending()
+    await ExtractionRunner(sqlite=app.sqlite, client=MockLLMClient()).extract_pending()
     resolver = IdentityResolver(sqlite=app.sqlite, embedder=Embedder(), ann=AnnIndex())
     decisions = resolver.resolve_pending()
     skills = app.sqlite.conn.execute("SELECT * FROM skill_nodes").fetchall()
