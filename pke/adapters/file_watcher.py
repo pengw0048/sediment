@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pke.adapters.chatgpt_history import import_chatgpt_archive
@@ -18,6 +18,7 @@ class InboxResult:
     path: Path
     status: str
     imported: int
+    events: list[EvidenceEvent] = field(default_factory=list)
     error: str | None = None
 
 
@@ -34,7 +35,13 @@ def import_dropin_file(path: Path) -> list[EvidenceEvent]:
 
 
 def process_inbox_once(inbox: Path) -> list[InboxResult]:
-    """Process current files in an inbox directory."""
+    """Process current files in an inbox directory.
+
+    The returned :class:`InboxResult` keeps the imported events on the
+    ``events`` field so a daemon caller can push them to its evidence
+    queue. CLI callers that only care about file shuffling can ignore
+    that field.
+    """
     inbox.mkdir(parents=True, exist_ok=True)
     processed = inbox / "processed"
     failed = inbox / "failed"
@@ -54,5 +61,12 @@ def process_inbox_once(inbox: Path) -> list[InboxResult]:
         else:
             target = processed / path.name
             shutil.move(str(path), target)
-            results.append(InboxResult(path=target, status="processed", imported=len(events)))
+            results.append(
+                InboxResult(
+                    path=target,
+                    status="processed",
+                    imported=len(events),
+                    events=events,
+                )
+            )
     return results

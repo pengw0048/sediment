@@ -71,7 +71,7 @@ async def start_adapters(
     broken adapter must not prevent the others from running.
     """
     from pke.adapters.registry import (
-        ALL_ADAPTERS,
+        ACTIVE_PRODUCERS,
         ClaudeCodeTailerAdapter,
         FileWatcherAdapter,
     )
@@ -80,7 +80,7 @@ async def start_adapters(
     started: list[Any] = []
     config = AdapterConfig(enabled=True, source_id="daemon", options={})
 
-    for cls in ALL_ADAPTERS:
+    for cls in ACTIVE_PRODUCERS:
         adapter = cls()
         # Producer adapters need the queue + their target directory threaded
         # in before start; the others get a no-op start from _AdapterBase.
