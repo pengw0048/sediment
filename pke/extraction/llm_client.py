@@ -4,11 +4,85 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from asyncio import to_thread
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from inspect import signature
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+
+_CALL_LOGGER: Callable[..., object] | None = None
+_CALL_KIND: ContextVar[str] = ContextVar("_CALL_KIND", default="unknown")
+
+
+def set_call_logger(logger: Callable[..., object] | None) -> None:
+    """Install a module-level sink that receives one record per LLM call.
+
+    The sink is called from inside :meth:`complete_json` of every client
+    in this module. App.create wires it to write to ``llm_call_log``;
+    tests can install a list-collector. Sinks must not raise; they get
+    swallowed if they do, since logging must never break the LLM call.
+    """
+    global _CALL_LOGGER  # noqa: PLW0603 — module-level sink is by design
+    _CALL_LOGGER = logger
+
+
+def call_kind(kind: str) -> _CallKindContext:
+    """Tag every LLM call inside the ``with`` block with a ``call_kind`` value.
+
+    Usage::
+
+        with call_kind("extract"):
+            await client.complete_json(...)
+
+    The context manager is reentrant; nested blocks restore the prior
+    value on exit.
+    """
+    return _CallKindContext(kind)
+
+
+class _CallKindContext:
+    __slots__ = ("_kind", "_token")
+
+    def __init__(self, kind: str) -> None:
+        self._kind = kind
+        self._token: Any = None
+
+    def __enter__(self) -> _CallKindContext:
+        self._token = _CALL_KIND.set(self._kind)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self._token is not None:
+            _CALL_KIND.reset(self._token)
+
+
+def _emit_call_log(
+    *,
+    provider: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    latency_ms: int,
+    error: str | None,
+) -> None:
+    """Forward one call's metrics to the installed sink, swallowing any errors."""
+    import contextlib
+
+    logger = _CALL_LOGGER
+    if logger is None:
+        return
+    with contextlib.suppress(Exception):
+        logger(
+            provider=provider,
+            model=model,
+            call_kind=_CALL_KIND.get(),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms,
+            error=error,
+        )
 
 
 class LLMClient(Protocol):
@@ -44,11 +118,32 @@ class AnthropicClient:
         system_blocks: list[dict[str, object]] = [
             {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
         ]
-        response = await client.messages.create(
+        started = time.monotonic_ns()
+        try:
+            response = await client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                system=system_blocks,  # type: ignore[arg-type]
+                messages=[{"role": "user", "content": user}],
+            )
+        except Exception as exc:
+            _emit_call_log(
+                provider="anthropic",
+                model=self.model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=(time.monotonic_ns() - started) // 1_000_000,
+                error=str(exc),
+            )
+            raise
+        usage = getattr(response, "usage", None)
+        _emit_call_log(
+            provider="anthropic",
             model=self.model,
-            max_tokens=1024,
-            system=system_blocks,  # type: ignore[arg-type]
-            messages=[{"role": "user", "content": user}],
+            prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            latency_ms=(time.monotonic_ns() - started) // 1_000_000,
+            error=None,
         )
         text = "".join(
             block.text for block in response.content if getattr(block, "type", "") == "text"
@@ -101,7 +196,28 @@ class OpenAIClient:
         }
         if self.extra_body is not None:
             request_kwargs["extra_body"] = self.extra_body
-        response = await client.chat.completions.create(**request_kwargs)  # type: ignore[call-overload]
+        started = time.monotonic_ns()
+        try:
+            response = await client.chat.completions.create(**request_kwargs)  # type: ignore[call-overload]
+        except Exception as exc:
+            _emit_call_log(
+                provider="openai",
+                model=self.model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=(time.monotonic_ns() - started) // 1_000_000,
+                error=str(exc),
+            )
+            raise
+        usage = getattr(response, "usage", None)
+        _emit_call_log(
+            provider="openai",
+            model=self.model,
+            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+            latency_ms=(time.monotonic_ns() - started) // 1_000_000,
+            error=None,
+        )
         content = response.choices[0].message.content or "{}"
         return dict(json.loads(content))
 

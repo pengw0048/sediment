@@ -95,15 +95,34 @@ def test_run_ari_week_returns_none_when_no_overlap(app) -> None:
     assert ari is None
 
 
-def test_run_llm_cost_30d_writes_zero_placeholder(app) -> None:
-    """LLM cost placeholder records 0 with a note until call logging exists."""
+def test_run_llm_cost_30d_sums_llm_call_log(app) -> None:
+    """run_llm_cost_30d totals cost_usd across the last 30 days."""
+    from pke.quality.llm_log import log_llm_call
+
+    log_llm_call(
+        app.sqlite,
+        provider="anthropic",
+        model="claude-haiku-4-5",
+        call_kind="extract",
+        prompt_tokens=1000,
+        completion_tokens=500,
+    )
+    log_llm_call(
+        app.sqlite,
+        provider="openai",
+        model="gpt-5-mini",
+        call_kind="judge",
+        prompt_tokens=500,
+        completion_tokens=200,
+    )
     cost = drift_metrics.run_llm_cost_30d(app.sqlite)
-    assert cost == 0.0
+    # Haiku: 1000/1M*1 + 500/1M*5 = 0.001 + 0.0025 = 0.0035
+    # gpt-5-mini: 500/1M*0.25 + 200/1M*2 = 0.000125 + 0.0004 = 0.000525
+    expected = 0.001 + 0.0025 + 0.000125 + 0.0004
+    assert abs(cost - expected) < 1e-9
     snap = latest_metric(app.sqlite, metric_name=METRIC_LLM_COST_30D)
     assert snap is not None
-    assert snap.value == 0.0
-    assert snap.band is Band.INFO
-    assert "llm_call_log" in str(snap.payload.get("note", ""))
+    assert abs(snap.value - expected) < 1e-9
 
 
 def test_scheduler_registers_drift_metrics_entry() -> None:

@@ -305,7 +305,10 @@ async def _generate_socratic(
         unaided_mastery=unaided_mastery,
         context_summary=context_summary,
     )
-    payload = await client.complete_json(system=system, user=user)
+    from pke.extraction.llm_client import call_kind
+
+    with call_kind("intervention"):
+        payload = await client.complete_json(system=system, user=user)
     question = str(payload.get("question", "")).strip()
     raw_hint_path = payload.get("hint_path", [])
     if not isinstance(raw_hint_path, list):

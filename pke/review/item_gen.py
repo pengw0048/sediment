@@ -130,7 +130,10 @@ class ItemGenerator:
             mastery_band=_mastery_band(unaided_mastery),
             recent_outsource_count=recent_outsource_count,
         )
-        payload = await self.client.complete_json(system=system, user=user)
+        from pke.extraction.llm_client import call_kind
+
+        with call_kind("item_gen"):
+            payload = await self.client.complete_json(system=system, user=user)
         return self._parse_item(chosen, payload)
 
     def _parse_item(self, item_type: ReviewItemType, payload: dict[str, object]) -> GeneratedItem:

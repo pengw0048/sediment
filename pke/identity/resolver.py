@@ -229,7 +229,10 @@ class IdentityResolver:
             existing_description=existing_desc or "(no description)",
         )
         assert self.judge_client is not None
-        payload = _run_coroutine_sync(self.judge_client.complete_json(system=system, user=user))
+        from pke.extraction.llm_client import call_kind
+
+        with call_kind("gray_band"):
+            payload = _run_coroutine_sync(self.judge_client.complete_json(system=system, user=user))
         verdict = str(payload.get("verdict", "new")).lower()
         if verdict not in {"merge", "new", "pending"}:
             verdict = "new"

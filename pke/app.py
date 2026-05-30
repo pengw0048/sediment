@@ -12,8 +12,14 @@ from dataclasses import dataclass, field
 from pke.config.settings import Settings
 from pke.db.sqlite import SQLiteStore
 from pke.evidence.store import EvidenceStore
-from pke.extraction.llm_client import AnthropicClient, LLMClient, OpenAIClient
+from pke.extraction.llm_client import (
+    AnthropicClient,
+    LLMClient,
+    OpenAIClient,
+    set_call_logger,
+)
 from pke.graph.kuzu_store import KuzuStore
+from pke.quality.llm_log import log_llm_call
 
 
 @dataclass(kw_only=True, slots=True)
@@ -34,6 +40,7 @@ class App:
         sqlite.initialize()
         graph = KuzuStore(root=resolved.data_dir / "graph")
         graph.ensure_schema()
+        set_call_logger(lambda **kw: log_llm_call(sqlite, **kw))
         return cls(
             settings=resolved,
             sqlite=sqlite,
@@ -44,6 +51,7 @@ class App:
 
     def close(self) -> None:
         """Close owned resources."""
+        set_call_logger(None)
         self.sqlite.close()
 
 
