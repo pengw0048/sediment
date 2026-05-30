@@ -1,0 +1,6 @@
+AGPL-3.0-or-later
+
+The core engine in `pke/` is licensed under the GNU Affero General Public
+License version 3 or, at your option, any later version.
+
+See https://www.gnu.org/licenses/agpl-3.0.html for the full license text.
