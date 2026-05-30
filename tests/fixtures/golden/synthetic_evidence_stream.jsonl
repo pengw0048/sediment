@@ -1,0 +1,3 @@
+{"timestamp": 1, "source": "manual_cli", "content": "How do I define a FastAPI route?", "ground_truth_skill_id": "fastapi-routes"}
+{"timestamp": 2, "source": "manual_cli", "content": "Explain espresso grind size.", "ground_truth_skill_id": "espresso-grind"}
+{"timestamp": 3, "source": "manual_cli", "content": "kubectl list pending pods", "ground_truth_skill_id": "kubectl-pods"}

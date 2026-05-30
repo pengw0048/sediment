@@ -1,0 +1,2 @@
+{"role":"user","content":"run pytest for the evidence store","timestamp":1}
+{"role":"assistant","content":"The tests passed.","timestamp":2}

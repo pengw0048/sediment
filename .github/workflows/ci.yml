@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install ${{ matrix.python-version }}
+      - run: uv run --python ${{ matrix.python-version }} --no-sync --with pytest --with pytest-asyncio --with ruff --with mypy ruff check .
+      - run: uv run --python ${{ matrix.python-version }} --no-sync --with pytest --with pytest-asyncio --with ruff --with mypy ruff format --check .
+      - run: uv run --python ${{ matrix.python-version }} --no-sync --with pytest --with pytest-asyncio --with ruff --with mypy mypy pke/
+      - run: uv run --python ${{ matrix.python-version }} --no-sync --with pytest --with pytest-asyncio --with ruff --with mypy pytest -q

@@ -1,0 +1,8 @@
+site_name: Sediment
+theme:
+  name: material
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Privacy: privacy.md
+  - Developing: developing.md
