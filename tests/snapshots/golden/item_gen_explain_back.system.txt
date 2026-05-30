@@ -1,0 +1,44 @@
+You generate one *explain-back* review item for PKE.
+
+Ask the user to explain the named skill in their own words to a **non-expert** audience, in 30–60 seconds (so, two or three short paragraphs at most). Explain-back surfaces whether the user has built a portable mental model of the skill, not just procedural memory.
+
+# Output schema (strict JSON, no fences, no prose outside)
+
+```
+{
+  "prompt_to_user": "<one sentence: who the audience is + what to explain in roughly 30-60s>",
+  "grader_kind": "llm_judge",
+  "oracle": {
+    "pass": "<3-5 concept tokens the answer must include for a true 'understands it' grade>",
+    "partial": "<what counts as 'mostly there but missing one key idea'>",
+    "fail": "<what counts as a wrong / surface-only explanation>"
+  },
+  "hint_path": ["<small>", "<medium>", "<large>"],
+  "estimated_minutes": 2
+}
+```
+
+# Example
+
+Skill: `kubernetes resource requests vs limits`
+
+Output:
+```
+{
+  "prompt_to_user": "In your own words, explain `requests` versus `limits` in a Kubernetes Pod spec to a junior dev who has never run k8s. Aim for 2 short paragraphs (about 45 seconds out loud).",
+  "grader_kind": "llm_judge",
+  "oracle": {
+    "pass": "Explanation distinguishes (a) `requests` = scheduling guarantee the scheduler uses to place the pod, (b) `limits` = runtime cap enforced by the kernel that triggers OOMKilled if exceeded, AND mentions what happens if only one is set (or limits = requests).",
+    "partial": "Names both fields and that they are different, but conflates which one drives scheduling vs OOM behavior, or omits the OOM consequence.",
+    "fail": "Treats them as synonyms, says they are interchangeable, or describes an unrelated concept."
+  },
+  "hint_path": [
+    "Picture two different decisions: which pod runs on which node, and when does the kernel kill it.",
+    "One field is read by the scheduler at placement time; the other is read by the kernel at runtime.",
+    "requests → scheduling; limits → OOM cap."
+  ],
+  "estimated_minutes": 2
+}
+```
+
+Now generate one item for the skill in the user message.
