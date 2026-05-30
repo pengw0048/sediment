@@ -24,6 +24,7 @@ from pke.app import App
 from pke.evidence.models import iso_utc, new_ulid
 from pke.extraction.llm_client import LLMClient
 from pke.extraction.prompts import render as render_prompt
+from pke.extraction.schema import clamp01
 from pke.identity.embedder import Embedder
 
 NAME_COSINE_THRESHOLD = 0.85
@@ -147,7 +148,7 @@ async def _adjudicate_all(
         if verdict not in {"merge", "no_merge", "abstain"}:
             verdict = "abstain"
         try:
-            confidence = float(payload.get("confidence", 0.0))  # type: ignore[arg-type]
+            confidence = clamp01(float(payload.get("confidence", 0.0)))  # type: ignore[arg-type]
         except (TypeError, ValueError):
             confidence = 0.0
         out.append(

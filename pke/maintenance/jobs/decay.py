@@ -12,6 +12,7 @@ parents soak a fraction of child mastery (alpha 0.4).
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from pke.db.sqlite import SQLiteStore
 from pke.evidence.models import iso_utc
@@ -20,10 +21,12 @@ from pke.mastery.spreading import spread_activation
 
 _CHILD_TO_PARENT_ALPHA = 0.4
 _PARENT_TO_CHILD_ALPHA = 0.7
+_HIERARCHY_RELATION_TYPE = "parent_of"
 
 
-def run(sqlite: SQLiteStore) -> int:
+def run(app: Any) -> int:
     """Recompute retrievability for every active skill. Returns count updated."""
+    sqlite: SQLiteStore = app.sqlite
     hlr = HLR()
     rows = sqlite.conn.execute(
         """
@@ -63,9 +66,37 @@ def run(sqlite: SQLiteStore) -> int:
         child_to_parent_alpha=_CHILD_TO_PARENT_ALPHA,
         parent_to_child_alpha=_PARENT_TO_CHILD_ALPHA,
         updated_at=timestamp,
+        edges=_load_hierarchy_edges(app),
     )
     sqlite.conn.commit()
     return len(updates)
+
+
+def _load_hierarchy_edges(app: Any) -> list[tuple[str, str]]:
+    """Pull active ``parent_of`` edges from the graph store, if one is wired in.
+
+    Returns a list of ``(parent_id, child_id)`` tuples with the bitemporal
+    window currently open (``t_valid_end IS NULL``). When the graph store
+    is absent or empty the result is ``[]`` and spreading no-ops cleanly.
+    """
+    graph = getattr(app, "graph", None)
+    if graph is None:
+        return []
+    try:
+        all_edges = graph.edges
+    except Exception:
+        return []
+    out: list[tuple[str, str]] = []
+    for edge in all_edges:
+        if edge.get("relation_type") != _HIERARCHY_RELATION_TYPE:
+            continue
+        if edge.get("t_valid_end"):
+            continue
+        src = edge.get("src")
+        dst = edge.get("dst")
+        if src and dst:
+            out.append((str(src), str(dst)))
+    return out
 
 
 def _delta_hours_since(row: dict[str, object], now: datetime) -> float:

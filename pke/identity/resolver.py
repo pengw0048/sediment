@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import Any, Coroutine
 
 from pke.db.sqlite import SQLiteStore
 from pke.evidence.models import iso_utc, new_ulid
 from pke.extraction.llm_client import LLMClient
 from pke.extraction.prompts import render as render_prompt
+from pke.extraction.schema import clamp01
 from pke.identity.ann_index import AnnIndex
 from pke.identity.denstream_online import OnlineClusterer
 from pke.identity.embedder import Embedder
@@ -26,6 +29,25 @@ def blob_to_vector(blob: bytes) -> list[float]:
     if not blob:
         return []
     return list(struct.unpack(f"{len(blob) // 4}f", blob))
+
+
+def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
+    """Run ``coro`` to completion regardless of whether a loop is already active.
+
+    ``IdentityResolver.resolve_pending`` is a synchronous entry point but its
+    judge call is async. When invoked from a synchronous context — a cron
+    job or the maintenance daemon — ``asyncio.run`` works directly. When
+    invoked from inside an event loop (FastAPI request, pytest-asyncio
+    auto-mode test), ``asyncio.run`` raises because nested loops are not
+    allowed; in that case we ship the coroutine to a worker thread that
+    owns its own loop. Either way the caller stays sync.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -207,12 +229,12 @@ class IdentityResolver:
             existing_description=existing_desc or "(no description)",
         )
         assert self.judge_client is not None
-        payload = asyncio.run(self.judge_client.complete_json(system=system, user=user))
+        payload = _run_coroutine_sync(self.judge_client.complete_json(system=system, user=user))
         verdict = str(payload.get("verdict", "new")).lower()
         if verdict not in {"merge", "new", "pending"}:
             verdict = "new"
         try:
-            confidence = float(payload.get("confidence", 0.0))  # type: ignore[arg-type]
+            confidence = clamp01(float(payload.get("confidence", 0.0)))
         except (TypeError, ValueError):
             confidence = 0.0
         return GrayBandVerdict(

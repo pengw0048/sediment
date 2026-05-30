@@ -45,7 +45,7 @@ def _insert_skill(
 def test_decay_lowers_retrievability_for_stale_skill(app):
     """A skill reviewed long ago decays below its starting retrievability."""
     _insert_skill(app, skill_id="stale", last_review_days_ago=60.0, retrievability=0.95)
-    updated = decay.run(app.sqlite)
+    updated = decay.run(app)
     assert updated == 1
     after = app.sqlite.conn.execute(
         "SELECT unaided_retrievability FROM skill_mastery_state WHERE skill_id = ?",
@@ -57,7 +57,7 @@ def test_decay_lowers_retrievability_for_stale_skill(app):
 def test_decay_keeps_fresh_skill_high(app):
     """A skill reviewed minutes ago should still be near 1.0 after decay."""
     _insert_skill(app, skill_id="fresh", last_review_days_ago=0.01, retrievability=0.5)
-    decay.run(app.sqlite)
+    decay.run(app)
     after = app.sqlite.conn.execute(
         "SELECT unaided_retrievability FROM skill_mastery_state WHERE skill_id = ?",
         ("fresh",),
@@ -90,6 +90,69 @@ def test_spread_activation_blends_parent_and_child(app):
     }
     assert abs(persisted["parent"] - 0.6) < 1e-9
     assert abs(persisted["child"] - 0.55) < 1e-9
+
+
+def test_decay_run_applies_hierarchy_spreading_through_graph(app, monkeypatch):
+    """decay.run loads parent_of edges from the graph and forwards them to spreading.
+
+    Audit found decay.run was calling spread_activation without an
+    ``edges`` arg, which short-circuited the function on its first line
+    and made hierarchy spreading a production no-op. This test seeds a
+    parent_of edge in Kuzu, runs the real decay job, and captures the
+    actual call to spread_activation to assert the edge round-tripped
+    through the loader.
+    """
+    from pke.graph.edges import upsert_relates_to
+    from pke.maintenance.jobs import decay as decay_module
+
+    _insert_skill(app, skill_id="parent", last_review_days_ago=10, retrievability=0.4)
+    _insert_skill(app, skill_id="child", last_review_days_ago=0.1, retrievability=0.95)
+
+    upsert_relates_to(
+        app.graph,
+        src="parent",
+        dst="child",
+        relation_type="parent_of",
+        strength=1.0,
+        source="test",
+    )
+
+    captured: dict[str, list[tuple[str, str]] | None] = {"edges": None}
+
+    def _spy(*args, **kwargs):
+        captured["edges"] = kwargs.get("edges")
+        # Hand off to the real spreader so the rest of the job behaves
+        # as it would in production.
+        from pke.mastery.spreading import spread_activation as real
+
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(decay_module, "spread_activation", _spy)
+
+    decay.run(app)
+
+    assert captured["edges"] == [
+        ("parent", "child")
+    ], "decay.run must load parent_of edges from the graph and forward them"
+
+
+def test_decay_run_empty_graph_passes_empty_edges(app, monkeypatch):
+    """When the graph has no parent_of edges, decay still completes (edges=[])."""
+    from pke.maintenance.jobs import decay as decay_module
+
+    _insert_skill(app, skill_id="solo", last_review_days_ago=1, retrievability=0.5)
+
+    captured: dict[str, list[tuple[str, str]] | None] = {"edges": None}
+
+    def _spy(*args, **kwargs):
+        captured["edges"] = kwargs.get("edges")
+        from pke.mastery.spreading import spread_activation as real
+
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(decay_module, "spread_activation", _spy)
+    decay.run(app)
+    assert captured["edges"] == []
 
 
 def test_spread_activation_noop_without_edges(app):
