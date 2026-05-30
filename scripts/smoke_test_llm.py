@@ -147,6 +147,35 @@ async def _smoke_item_gen(client: OpenAIClient) -> None:
         assert item.hint_path, item
 
 
+async def _smoke_edc(client: OpenAIClient) -> None:
+    print("\n=== edc_write_definition ===")
+    for phrase in ("FSDP", "fully sharded data parallel", "python resource module"):
+        payload = await client.complete_json(
+            system=render_prompt("edc_write_definition.system.j2"),
+            user=render_prompt("edc_write_definition.user.j2", phrase=phrase),
+        )
+        print(f"{phrase!r}: {payload!r}")
+        assert "definition" in payload, payload
+        assert isinstance(payload["definition"], str), payload
+        assert len(payload["definition"]) > 10, payload
+
+    print("\n=== edc_verify_merge ===")
+    payload = await client.complete_json(
+        system=render_prompt("edc_verify_merge.system.j2"),
+        user=render_prompt(
+            "edc_verify_merge.user.j2",
+            a_name="FSDP",
+            a_definition="Sharding model parameters, gradients, and optimizer state in PyTorch.",
+            b_name="fully sharded data parallel",
+            b_definition="Splitting model parameters and optimizer state across data-parallel ranks.",
+            name_cosine=0.88,
+            def_cosine=0.92,
+        ),
+    )
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    assert payload.get("verdict") in {"merge", "no_merge", "abstain"}, payload
+
+
 async def main() -> None:
     client = _client()
     failures: list[str] = []
@@ -155,6 +184,7 @@ async def main() -> None:
         ("judge", _smoke_judge),
         ("gray_band", _smoke_gray_band),
         ("item_gen", _smoke_item_gen),
+        ("edc", _smoke_edc),
     ]:
         try:
             await runner(client)

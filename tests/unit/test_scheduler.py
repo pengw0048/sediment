@@ -20,7 +20,9 @@ def test_default_entries_cover_canonical_jobs():
     """default_job_entries covers vacuum, decay, audit_*, reembed, and distill."""
     entries = default_job_entries()
     names = {entry.name for entry in entries}
-    assert {"vacuum", "decay", "audit_merge", "audit_split", "reembed", "distill"}.issubset(names)
+    assert {"vacuum", "decay", "audit_merge", "audit_split", "reembed", "distill", "edc"}.issubset(
+        names
+    )
 
 
 def test_every_default_entry_has_cron_trigger():
