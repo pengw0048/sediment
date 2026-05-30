@@ -14,10 +14,10 @@ def upsert_relates_to(
     relation_type: str,
     strength: float,
     source: str,
-    valid_from: str | None = None,
-    valid_to: str | None = None,
-    recorded_from: str | None = None,
-    recorded_to: str | None = None,
+    t_valid_start: str | None = None,
+    t_valid_end: str | None = None,
+    t_observed_start: str | None = None,
+    t_observed_end: str | None = None,
 ) -> None:
     """Write a bitemporal edge with four timestamps."""
     now = iso_utc()
@@ -28,10 +28,10 @@ def upsert_relates_to(
             "relation_type": relation_type,
             "strength": strength,
             "source": source,
-            "valid_from": valid_from or now,
-            "valid_to": valid_to,
-            "recorded_from": recorded_from or now,
-            "recorded_to": recorded_to,
+            "t_valid_start": t_valid_start or now,
+            "t_valid_end": t_valid_end,
+            "t_observed_start": t_observed_start or now,
+            "t_observed_end": t_observed_end,
             "created_at": now,
         }
     )

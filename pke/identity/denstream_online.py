@@ -1,52 +1,70 @@
-"""Online micro-clusterer compatible with river DenStream semantics."""
+"""River DenStream wrapper for online identity micro-clustering.
+
+Intentionally unwired in PR-2 (peng/pr-2-real-dependencies) — only the toy
+implementation was replaced with the real `river.cluster.DenStream`. Wiring
+into the online identity path (resolver / Layer 3 hot path) is tracked as
+BLOCKER.md B10b and will be done in PR-3 along with the rest of the
+identity-layer LLM judge + gray-band logic.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from pke.identity.embedder import cosine
+from river.cluster import DenStream
 
-
-@dataclass(kw_only=True, slots=True)
-class MicroCluster:
-    """One online micro-cluster."""
-
-    centroid: list[float]
-    weight: int = 1
-
-    def update(self, vector: list[float]) -> None:
-        """Update centroid with one vector."""
-        self.weight += 1
-        self.centroid = [
-            old + (new - old) / self.weight for old, new in zip(self.centroid, vector, strict=True)
-        ]
+from pke.config.settings import Settings
 
 
 @dataclass(kw_only=True, slots=True)
 class OnlineClusterer:
-    """Small DenStream-style wrapper with bounded micro-cluster growth."""
+    """Thin wrapper around `river.cluster.DenStream`."""
 
-    eps: float = 0.18
-    max_clusters: int = 500
-    clusters: list[MicroCluster] = field(default_factory=list)
+    decaying_factor: float = 0.0006
+    epsilon: float = 0.18
+    beta: float = 0.75
+    mu: float = 2.0
+    n_samples_init: int = 1000
+    stream_speed: int = 100
+    model: Any = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.model = DenStream(
+            decaying_factor=self.decaying_factor,
+            beta=self.beta,
+            mu=self.mu,
+            epsilon=self.epsilon,
+            n_samples_init=self.n_samples_init,
+            stream_speed=self.stream_speed,
+        )
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> OnlineClusterer:
+        """Create a DenStream wrapper from identity settings."""
+        identity = settings.raw.get("identity", {})
+        return cls(
+            decaying_factor=float(identity.get("denstream_lambda", 0.0006)),
+            epsilon=float(identity.get("denstream_eps", 0.18)),
+            beta=float(identity.get("denstream_beta", 0.75)),
+            mu=float(identity.get("denstream_mu", 2.0)),
+        )
 
     def partial_fit(self, vector: list[float]) -> int:
-        """Assign a vector to a micro-cluster and return cluster index."""
-        if not self.clusters:
-            self.clusters.append(MicroCluster(centroid=vector))
-            return 0
-        distances = [
-            (idx, 1.0 - cosine(vector, cluster.centroid))
-            for idx, cluster in enumerate(self.clusters)
-        ]
-        idx, distance = min(distances, key=lambda item: item[1])
-        if distance <= self.eps or len(self.clusters) >= self.max_clusters:
-            self.clusters[idx].update(vector)
-            return idx
-        self.clusters.append(MicroCluster(centroid=vector))
-        return len(self.clusters) - 1
+        """Learn one vector and return River's current cluster assignment."""
+        features = self._features(vector)
+        self.model.learn_one(features)
+        return int(self.model.predict_one(features))
+
+    def assign(self, vector: list[float]) -> int:
+        """Compatibility alias for the identity worker."""
+        return self.partial_fit(vector)
 
     @property
     def micro_cluster_count(self) -> int:
-        """Return the current micro-cluster count."""
-        return len(self.clusters)
+        """Return DenStream's current number of clusters."""
+        return int(self.model.n_clusters)
+
+    @staticmethod
+    def _features(vector: list[float]) -> dict[int, float]:
+        return dict(enumerate(vector))

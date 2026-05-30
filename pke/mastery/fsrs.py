@@ -1,9 +1,11 @@
-"""py-fsrs 4.5.x wrapper with deterministic fallback."""
+"""FSRS scheduler wrapper backed by the upstream fsrs package."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
+
+from fsrs import Card, Rating, Scheduler
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -21,30 +23,36 @@ class FSRSResult:
 class FSRSScheduler:
     """Wrap FSRS while pinning the v4 behavior expected by the spec."""
 
-    version_guard: str = "4.5.x"
+    scheduler: Scheduler
+
+    def __init__(self) -> None:
+        self.scheduler = Scheduler(enable_fuzzing=False)
 
     def schedule(self, *, grade: str, stability: float, difficulty: float) -> FSRSResult:
-        """Schedule next review from a pass/partial/fail signal."""
-        if grade == "pass":
-            stability = max(1.0, stability * 2.0 if stability else 1.0)
-            state = "review"
-        elif grade == "partial":
-            stability = max(0.5, stability * 1.3 if stability else 0.5)
-            state = "learning"
-        else:
-            stability = max(0.1, stability * 0.5)
-            difficulty = min(10.0, difficulty + 0.5)
-            state = "relearning"
-        days = max(1, int(round(stability)))
-        due_at = (
-            (datetime.now(tz=UTC) + timedelta(days=days))
-            .isoformat(timespec="seconds")
-            .replace("+00:00", "Z")
+        """Schedule next review from a pass/partial/fail signal using FSRS."""
+        review_at = datetime.now(tz=UTC)
+        has_fsrs_state = stability > 0 and difficulty > 0
+        card = Card(
+            stability=stability if has_fsrs_state else None,
+            difficulty=difficulty if has_fsrs_state else None,
+            due=review_at,
+            last_review=review_at if has_fsrs_state else None,
         )
+        reviewed = self.scheduler.review_card(card, self._rating_for_grade(grade), review_at)[0]
+        due_at = reviewed.due.astimezone(UTC)
+        scheduled_days = max(0, int(round((due_at - review_at).total_seconds() / 86_400)))
         return FSRSResult(
-            state=state,
-            stability=stability,
-            difficulty=difficulty,
-            scheduled_days=days,
-            due_at=due_at,
+            state=str(reviewed.state.name).lower(),
+            stability=float(reviewed.stability or 0.0),
+            difficulty=float(reviewed.difficulty or 0.0),
+            scheduled_days=scheduled_days,
+            due_at=due_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
         )
+
+    @staticmethod
+    def _rating_for_grade(grade: str) -> Rating:
+        if grade == "pass":
+            return Rating.Good
+        if grade == "partial":
+            return Rating.Hard
+        return Rating.Again

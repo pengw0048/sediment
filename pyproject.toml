@@ -42,7 +42,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-local-llm = ["llama-cpp-python>=0.2.79,<0.3"]
+local-llm = [
+    "llama-cpp-python>=0.3",
+]
 distill = ["sentence-transformers[train]>=3.0"]
 dev = [
   "pytest>=8.1,<9",
