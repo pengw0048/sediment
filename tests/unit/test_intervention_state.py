@@ -179,6 +179,48 @@ def test_mastery_out_of_band_does_not_increment_daily(app) -> None:
     assert state.daily_intervention_count == 0
 
 
+async def test_should_intervene_async_uses_llm_question_when_client_configured(app) -> None:
+    """When an LLM client is wired in, the async variant rewrites question and hint_path."""
+    from unittest.mock import AsyncMock
+
+    decider = _decider(app)
+    decider.llm_client = AsyncMock(
+        complete_json=AsyncMock(
+            return_value={
+                "question": "What's the first command you'd reach for to inspect this pod?",
+                "hint_path": ["check `kubectl`", "use `describe`", "look at events at the bottom"],
+                "rationale": "ok",
+            }
+        )
+    )
+    payload = await decider.should_intervene_async(
+        source="claude_code",
+        skill_id="x",
+        skill_label="kubectl describe pod",
+        unaided_mastery=0.5,
+    )
+    assert payload is not None
+    assert payload.question.startswith("What's the first command")
+    assert payload.hint_path[0] == "check `kubectl`"
+
+
+async def test_should_intervene_async_falls_back_when_llm_fails(app) -> None:
+    """If the LLM raises, the deterministic question is returned without re-running gates."""
+    from unittest.mock import AsyncMock
+
+    decider = _decider(app)
+    decider.llm_client = AsyncMock(complete_json=AsyncMock(side_effect=RuntimeError("boom")))
+    payload = await decider.should_intervene_async(
+        source="claude_code",
+        skill_id="x",
+        skill_label="kubectl describe pod",
+        unaided_mastery=0.5,
+    )
+    assert payload is not None
+    # Fallback path: hard-coded prefix
+    assert payload.question.startswith("Before AI answers")
+
+
 @pytest.mark.parametrize(
     "task_type",
     ["debug", "ship"],

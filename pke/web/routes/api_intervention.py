@@ -21,13 +21,17 @@ def router(store_getter: Any) -> APIRouter:
     @api.post("/check")
     async def check(payload: dict[str, Any]) -> dict[str, Any]:
         app = store_getter()
-        decider = PersistentInterventionDecider(sqlite=app.sqlite)
-        intervention = decider.should_intervene(
+        decider = PersistentInterventionDecider(
+            sqlite=app.sqlite,
+            llm_client=getattr(app, "llm_client", None),
+        )
+        intervention = await decider.should_intervene_async(
             source=str(payload.get("source", "browser_ext")),
             skill_id=str(payload.get("skill_id", "unknown")),
             skill_label=str(payload.get("skill_label", "this skill")),
             unaided_mastery=float(payload.get("unaided_mastery", 0.5)),
             task_type=str(payload.get("task_type", "learn")),
+            context_summary=payload.get("context_summary"),
         )
         if intervention is None:
             return {"intervene": False}

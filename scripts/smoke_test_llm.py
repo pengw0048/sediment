@@ -176,6 +176,29 @@ async def _smoke_edc(client: OpenAIClient) -> None:
     assert payload.get("verdict") in {"merge", "no_merge", "abstain"}, payload
 
 
+async def _smoke_intervention(client: OpenAIClient) -> None:
+    system = render_prompt("intervention_socratic.system.j2")
+    user = render_prompt(
+        "intervention_socratic.user.j2",
+        skill_label="kubectl describe pod",
+        source="claude_code",
+        unaided_mastery=0.45,
+        context_summary=(
+            "Asked AI to debug a CrashLoopBackOff pod. Earlier today, user "
+            "ran kubectl get pods but did not run describe."
+        ),
+    )
+    print("\n=== intervention_socratic ===")
+    payload = await client.complete_json(system=system, user=user)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    question = str(payload.get("question", "")).strip()
+    hint_path = payload.get("hint_path") or []
+    assert question, payload
+    assert isinstance(hint_path, list), payload
+    assert len(hint_path) == 3, payload
+    assert all(isinstance(item, str) and item.strip() for item in hint_path), payload
+
+
 async def main() -> None:
     client = _client()
     failures: list[str] = []
@@ -185,6 +208,7 @@ async def main() -> None:
         ("gray_band", _smoke_gray_band),
         ("item_gen", _smoke_item_gen),
         ("edc", _smoke_edc),
+        ("intervention", _smoke_intervention),
     ]:
         try:
             await runner(client)
