@@ -80,7 +80,12 @@ def test_hlr_formula_and_mastery_update(app):
         (skill_id, now),
     )
     app.sqlite.conn.commit()
+    # halflife = exp(0) = 1h, so p(delta=1h) = 2^-1 = 0.5
     assert HLR(theta=[0.0]).recall_probability(delta_hours=1.0, features=[1.0]) == 0.5
+    # Default theta produces ~24h halflife at zero features (only bias=1)
+    default_hlr = HLR()
+    halflife = default_hlr.halflife([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert 20.0 < halflife < 30.0
     MasteryUpdater(sqlite=app.sqlite).update_review(
         skill_id=skill_id,
         grade="pass",
@@ -304,3 +309,79 @@ def test_resolver_decide_legacy_path_without_judge(monkeypatch):
     )
     assert (action_hi, sid_hi) == ("merge", "skill-A")
     assert (action_lo, sid_lo) == ("new", "skill-NEW")
+
+
+def test_hlr_fit_reduces_loss_on_synthetic_recall_data():
+    """HLR.fit optimises theta against a small synthetic dataset."""
+    import math
+    import random
+
+    from pke.mastery.hlr import HLR
+
+    rng = random.Random(1234)
+    # Generate samples whose true halflife is 48h for "well-learned" features
+    # (recent_pass_rate=1.0, log_reps high) and 6h for "fresh" features.
+    samples: list[tuple[list[float], float, bool]] = []
+    for _ in range(200):
+        is_well_learned = rng.random() < 0.5
+        features = [
+            1.0,  # bias
+            math.log(20.0 if is_well_learned else 1.0),
+            1.0 if is_well_learned else 0.0,
+            math.log(20.0 if is_well_learned else 1.0),
+            math.log(5.0 if is_well_learned else 0.0 + 1.0),
+            3.0 if is_well_learned else 7.0,
+            0.0,
+            0.0,
+        ]
+        true_h = 48.0 if is_well_learned else 6.0
+        delta = rng.uniform(0.5, 24.0)
+        true_p = 2 ** (-delta / true_h)
+        recalled = rng.random() < true_p
+        samples.append((features, delta, recalled))
+
+    model = HLR()
+    initial_predictions = [
+        model.recall_probability(delta_hours=delta, features=feats)
+        for feats, delta, _ in samples
+    ]
+    initial_loss = sum(
+        -(1 if rec else 0) * math.log(max(p, 1e-9))
+        - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
+        for (_, _, rec), p in zip(samples, initial_predictions, strict=True)
+    ) / len(samples)
+
+    model.fit(samples, max_iter=400)
+    fitted_predictions = [
+        model.recall_probability(delta_hours=delta, features=feats)
+        for feats, delta, _ in samples
+    ]
+    fitted_loss = sum(
+        -(1 if rec else 0) * math.log(max(p, 1e-9))
+        - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
+        for (_, _, rec), p in zip(samples, fitted_predictions, strict=True)
+    ) / len(samples)
+
+    assert fitted_loss < initial_loss
+
+
+def test_hlr_extract_features_emits_canonical_layout():
+    """extract_features returns a vector matching the FEATURE_NAMES order."""
+    from pke.mastery.hlr import FEATURE_NAMES, extract_features
+
+    row = {
+        "unaided_reps": 5,
+        "unaided_stability": 12.0,
+        "unaided_difficulty": 4.0,
+        "functional_reps": 0,
+        "functional_stability": 0.0,
+        "functional_difficulty": 0.0,
+    }
+    vec = extract_features(row, dimension="unaided", has_parent=True, recent_pass_rate=0.8)
+    assert len(vec) == len(FEATURE_NAMES)
+    # bias must be 1
+    assert vec[0] == 1.0
+    # is_functional must be 0 for the unaided dimension
+    assert vec[6] == 0.0
+    # has_parent must be 1
+    assert vec[7] == 1.0
