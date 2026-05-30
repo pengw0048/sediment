@@ -26,17 +26,28 @@ class AnthropicClient:
     api_key_env: str = "ANTHROPIC_API_KEY"
 
     async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
-        """Call Anthropic and parse a JSON object."""
+        """Call Anthropic and parse a JSON object.
+
+        The ``system`` block is sent as a single text block with ``cache_control``
+        set to ``ephemeral`` so Anthropic's prompt cache stays warm across calls
+        that share the same extraction / intervention / grading prompt prefix.
+        """
         import anthropic
 
         key = os.environ.get(self.api_key_env)
         if not key:
             raise RuntimeError(f"{self.api_key_env} is not set")
         client = anthropic.AsyncAnthropic(api_key=key)
+        # ``cache_control`` is an Anthropic prompt-caching marker. It is not
+        # declared in the SDK's TypedDict for system blocks (still beta in the
+        # type stubs) but is part of the Messages API contract.
+        system_blocks: list[dict[str, object]] = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
         response = await client.messages.create(
             model=self.model,
             max_tokens=1024,
-            system=system,
+            system=system_blocks,  # type: ignore[arg-type]
             messages=[{"role": "user", "content": user}],
         )
         text = "".join(

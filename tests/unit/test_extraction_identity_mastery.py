@@ -13,6 +13,7 @@ from pke.identity.resolver import IdentityResolver
 from pke.mastery.fsrs import FSRSScheduler
 from pke.mastery.hlr import HLR
 from pke.mastery.state import MasteryUpdater
+from pke.review.grader import LLM_JUDGE_MIN_CONFIDENCE, Grader
 from pke.testing import MockLLMClient
 
 
@@ -138,3 +139,57 @@ def test_local_client_raises_clear_error_when_thinking_disabled(monkeypatch):
     client = LocalClient(enable_thinking=False)
     with pytest.raises(NotImplementedError, match="enable_thinking"):
         asyncio.run(client.complete_json(system="s", user="u"))
+
+
+async def test_grade_llm_judge_uses_rubric_and_returns_confidence():
+    """B4 contract: Grader.grade_llm_judge calls the LLM with a rubric.
+
+    Parses {grade, confidence, feedback}, and surfaces low-confidence calls.
+    """
+    grader = Grader(client=MockLLMClient())
+    rubric = {
+        "pass": "names a concrete first check",
+        "partial": "vague answer with no specifics",
+        "fail": "unrelated or empty",
+    }
+    result = await grader.grade_llm_judge(
+        item_prompt="For git rebase --interactive, what's the first concrete thing you would check?",
+        user_answer="I check whether the working tree is clean — `git status` first.",
+        rubric=rubric,
+    )
+    assert result.grade in {"pass", "partial", "fail"}
+    assert result.confidence > 0
+    assert result.feedback
+
+
+async def test_grade_llm_judge_falls_back_when_confidence_low():
+    """B4 contract: low-confidence judge calls are flagged for self-report fallback.
+
+    A judge confidence below LLM_JUDGE_MIN_CONFIDENCE prefixes feedback
+    with [low-confidence judge] so callers can degrade to self-report.
+    """
+
+    class _LowConfidenceClient:
+        async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
+            del system, user
+            return {"grade": "partial", "confidence": 0.3, "feedback": "borderline"}
+
+    grader = Grader(client=_LowConfidenceClient())
+    result = await grader.grade_llm_judge(
+        item_prompt="x", user_answer="y", rubric={"pass": "", "partial": "", "fail": ""}
+    )
+    assert result.confidence < LLM_JUDGE_MIN_CONFIDENCE
+    assert "low-confidence" in result.feedback
+
+
+def test_grade_llm_judge_raises_when_no_client():
+    """B4 contract: missing LLMClient must raise, not silently grade."""
+    import asyncio
+
+    grader = Grader(client=None)
+    with pytest.raises(RuntimeError, match="LLMClient"):
+        asyncio.run(
+            grader.grade_llm_judge(
+                item_prompt="x", user_answer="y", rubric={"pass": "", "partial": "", "fail": ""}
+            )
+        )

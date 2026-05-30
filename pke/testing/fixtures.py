@@ -31,11 +31,22 @@ def temp_app() -> Iterator[App]:
 
 @dataclass(kw_only=True, slots=True)
 class MockLLMClient:
-    """Small deterministic LLM fixture for unit tests."""
+    """Small deterministic LLM fixture for unit tests.
+
+    The mock dispatches by inspecting the system prompt for distinctive
+    tokens. This keeps the fixture single-source-of-truth for unit tests
+    that exercise different LLM call sites (extraction, judging, ...).
+    """
 
     async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
+        if "review-answer judge" in system or "Item prompt:" in user:
+            return self._judge(system=system, user=user)
+        return self._extract(system=system, user=user)
+
+    def _extract(self, *, system: str, user: str) -> dict[str, object]:
         confidence = 0.8 if system else 0.5
         return {
+            "rationale": "mock extraction",
             "skills": [
                 {
                     "name": "fastapi routes",
@@ -45,5 +56,24 @@ class MockLLMClient:
                     "span_start": 0,
                     "span_end": min(len(user), 80),
                 }
-            ]
+            ],
+        }
+
+    def _judge(self, *, system: str, user: str) -> dict[str, object]:
+        # Treat a non-empty user answer over 40 chars as "pass", shorter as
+        # "partial", and an empty answer as "fail". Confidence depends on
+        # whether the rubric mentioned a pass criterion.
+        marker = "User answer:"
+        body = user.split(marker, 1)[-1].strip() if marker in user else user
+        if len(body) > 60:
+            grade = "pass"
+        elif len(body) > 10:
+            grade = "partial"
+        else:
+            grade = "fail"
+        confidence = 0.85 if "pass:" in user and "pass:" not in system else 0.7
+        return {
+            "grade": grade,
+            "confidence": confidence,
+            "feedback": f"mock judge grade={grade}",
         }
