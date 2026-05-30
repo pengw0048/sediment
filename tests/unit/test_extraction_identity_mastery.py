@@ -49,7 +49,12 @@ def test_graph_bitemporal_edges(tmp_path):
         strength=0.8,
         source="unit",
     )
-    assert {"valid_from", "valid_to", "recorded_from", "recorded_to"}.issubset(graph.edges[0])
+    assert {
+        "t_valid_start",
+        "t_valid_end",
+        "t_observed_start",
+        "t_observed_end",
+    }.issubset(graph.edges[0])
 
 
 def test_hlr_formula_and_mastery_update(app):
