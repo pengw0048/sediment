@@ -30,6 +30,7 @@ from pke.maintenance.jobs import (
     distill,
     drift_metrics,
     edc,
+    leiden_cluster,
     reembed,
     vacuum,
 )
@@ -102,6 +103,12 @@ def default_job_entries() -> list[JobEntry]:
             trigger=CronTrigger(hour=3, minute=15),
             job=drift_metrics.run,
             description="Sample centroid_count, ARI vs prior week, and LLM cost (ARCH-2).",
+        ),
+        JobEntry(
+            name="leiden_cluster",
+            trigger=CronTrigger(day_of_week="sun", hour=5, minute=30),
+            job=leiden_cluster.run,
+            description="Re-cluster the skill centroid graph and persist parent_of edges.",
         ),
     ]
 

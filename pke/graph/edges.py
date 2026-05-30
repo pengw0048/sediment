@@ -58,11 +58,18 @@ def invalidate_relates_to(
     in the graph (preserving bitemporal history) and queries that filter on
     ``t_valid_end IS NULL OR t_valid_end > now`` skip it.
     """
+    now = iso_utc()
     graph.upsert_edge(
         {
             "src": src,
             "dst": dst,
             "relation_type": relation_type,
-            "t_valid_end": t_valid_end or iso_utc(),
+            "strength": 0.0,
+            "source": "invalidate",
+            "t_valid_start": now,
+            "t_valid_end": t_valid_end or now,
+            "t_observed_start": now,
+            "t_observed_end": None,
+            "created_at": now,
         }
     )
