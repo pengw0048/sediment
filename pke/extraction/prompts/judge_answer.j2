@@ -1,0 +1,14 @@
+SYSTEM:
+You grade a user's answer to a self-review item. Output strict JSON.
+Use only the rubric. Be charitable, honest, and neutral.
+
+USER:
+Item prompt: {{ prompt_to_user }}
+Rubric:
+- pass: {{ rubric_pass }}
+- partial: {{ rubric_partial }}
+- fail: {{ rubric_fail }}
+User answer:
+---
+{{ user_answer }}
+---
