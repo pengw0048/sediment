@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -40,7 +40,7 @@ class ExtractedSkill:
     description: str
     polarity: Polarity
     confidence: float
-    span: ExtractedSpan = ExtractedSpan()
+    span: ExtractedSpan = field(default_factory=ExtractedSpan)
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
