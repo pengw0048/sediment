@@ -28,13 +28,14 @@ from pke.maintenance.jobs import (
     audit_split,
     decay,
     distill,
+    drift_metrics,
     edc,
     reembed,
     vacuum,
 )
 
 TriggerSpec: TypeAlias = CronTrigger | IntervalTrigger
-JobFn = Callable[[Any], None | int]
+JobFn = Callable[[Any], object]
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -95,6 +96,12 @@ def default_job_entries() -> list[JobEntry]:
             trigger=CronTrigger(hour=4, minute=0),
             job=edc.run,
             description="Extract-Define-Canonicalize merge sweep over close skill pairs.",
+        ),
+        JobEntry(
+            name="drift_metrics",
+            trigger=CronTrigger(hour=3, minute=15),
+            job=drift_metrics.run,
+            description="Sample centroid_count, ARI vs prior week, and LLM cost (ARCH-2).",
         ),
     ]
 
