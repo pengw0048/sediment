@@ -264,13 +264,22 @@ CREATE INDEX idx_intervention_log_user_time ON intervention_log(user_id, trigger
 - **应是**: hnswlib HNSW, M=32, ef=200, 持久化 `.bin`，median 查询 < 100ms
 - **修复**: 重写 `ann_index.py`，`import hnswlib`；wrapper API 保持 `add(id, vec) / search(vec, k) / save(path) / load(path)`；持久化到 `~/.local/share/pke/hnsw.bin`
 
-### B10 — DenStream 是 hand-rolled centroid merger
+### B10a — DenStream 是 hand-rolled centroid merger ✅ DONE (PR-2)
 
-- **Severity**: BLOCKER
+- **Severity**: BLOCKER (resolved)
 - **位置**: `pke/identity/denstream_online.py:10-52`
 - **现状**: 无 λ-fading、无 core/potential/outlier 分类、`denstream_lambda` 配置读取后不用、`max_clusters=500` 满了之后强塞最近 cluster（与 spec 语义相反）
 - **应是**: `river.cluster.DenStream` wrapper
 - **修复**: `from river.cluster import DenStream`；保留我们自己的 `assign(embedding) -> cluster_id` 接口；λ、ε、β、μ 参数从 spec § 3 默认值 + 用户 settings 读
+- **完成情况**: PR-2 commit `6f48536`。real `river.cluster.DenStream`，四参数 spec 一致，toy 物理删除。文件顶端有 PR-3 wiring 标注。
+
+### B10b — Wire OnlineClusterer into online identity hot path
+
+- **Severity**: BLOCKER (PR-3 scope)
+- **位置**: `pke/identity/resolver.py` —— 当前 resolver 不调用 `OnlineClusterer.partial_fit`
+- **现状**: PR-2 替换好了 DenStream 但没接 caller，整条 online clustering 路径 dead code
+- **应是**: 每条新 evidence 在 `resolve_pending` 内先 embed → `OnlineClusterer.partial_fit(vec)` 拿 micro_cluster_id → 写入 `skill_candidates.micro_cluster_id` 列（新加）→ 后续 batch_cluster / EDC 用 micro_cluster 而非单条 candidate 做合并候选
+- **修复**: 在 `resolver.py` 内注入 `OnlineClusterer.from_settings()`；增加 `micro_cluster_id` 列到 `skill_candidates`；写最小行为测试（注入 50 个三簇向量、断言 micro_cluster_count > 0、近邻向量同 label）
 
 ### B11 — Kuzu 是一个 graph.json 文件
 
@@ -327,17 +336,26 @@ CREATE INDEX idx_intervention_log_user_time ON intervention_log(user_id, trigger
   3. 返回 `IngestResult.DUP_MERGED` 让 caller 知道
   4. unit test 覆盖所有 stage 1/2 命中分支
 
-### B15 — Local Qwen3-8B fallback 不存在
+### B15a — Local Qwen3-8B fallback 不存在 ✅ DONE (PR-2)
 
-- **Severity**: BLOCKER
+- **Severity**: BLOCKER (resolved)
 - **位置**: `pke/extraction/llm_client.py:69-91`
 - **现状**: `LocalClient` 把长度 > 4 的单词当 skill 提取；`enable_thinking` 是 dead field；`llama-cpp-python` 声明了但没 import
 - **应是**: 真的用 llama-cpp-python 加载 Qwen3-8B-Instruct GGUF；传 `chat_template_kwargs={"enable_thinking": False}`（spec §1 + global memory）
+- **完成情况**: PR-2 commit `91e09db`。real `from llama_cpp import Llama`，toy 物理删除，签名 introspect `chat_template_kwargs`。`enable_thinking=False` 且 llama-cpp-python 不支持 chat_template_kwargs 时 `raise NotImplementedError` 带可操作 message。覆盖测试 `test_local_client_raises_clear_error_when_thinking_disabled`。
+
+### B15b — Manual Jinja2ChatFormatter fallback for local Qwen3 with thinking disabled
+
+- **Severity**: MAJOR (not blocker — only triggers when user explicitly chooses `LocalClient` with `enable_thinking=False`)
+- **位置**: `pke/extraction/llm_client.py:LocalClient` (currently raises `NotImplementedError`)
+- **现状**: 默认 settings `enable_thinking=False` 但 llama-cpp-python 0.3.23 的 `create_chat_completion` 不接 `chat_template_kwargs`，因此 `LocalClient` 永远走不到真推理
+- **应是**: 手搓 Jinja2 chat template 走 `Llama.create_completion(prompt=..., response_format=..., temperature=0)`
 - **修复**:
-  1. `from llama_cpp import Llama`
-  2. 模型路径从 settings 读，默认 `~/.local/share/pke/models/qwen3-8b-instruct-q4_k_m.gguf`
-  3. Chat completion 时传 `chat_template_kwargs={"enable_thinking": False}`
-  4. 文档：`pke fetch-local-model` 命令引导用户下载 GGUF
+  1. 在 `_llama()` 之外加 `_chat_template()`：从 GGUF metadata 或 `~/.local/share/pke/models/qwen3-tokenizer_config.json` 取 jinja template
+  2. 用 `llama_cpp.llama_chat_format.Jinja2ChatFormatter(template, eos_token="<|im_end|>", bos_token="").__call__(messages=..., enable_thinking=False)` 渲染 prompt
+  3. `Llama.create_completion(prompt=rendered, response_format={"type":"json_object"}, ...)` 然后 parse JSON
+  4. 处理 Qwen3 stop tokens (`<|im_end|>` 等)
+- **预估**: 30-50 行新代码
 
 ### B16 — Fallback chain Anthropic → OpenAI → Local 不存在
 

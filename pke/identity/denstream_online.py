@@ -1,4 +1,11 @@
-"""River DenStream wrapper for online identity micro-clustering."""
+"""River DenStream wrapper for online identity micro-clustering.
+
+Intentionally unwired in PR-2 (peng/pr-2-real-dependencies) — only the toy
+implementation was replaced with the real `river.cluster.DenStream`. Wiring
+into the online identity path (resolver / Layer 3 hot path) is tracked as
+BLOCKER.md B10b and will be done in PR-3 along with the rest of the
+identity-layer LLM judge + gray-band logic.
+"""
 
 from __future__ import annotations
 

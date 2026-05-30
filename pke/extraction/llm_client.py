@@ -97,9 +97,15 @@ class LocalClient:
         if supports_template_kwargs:
             kwargs["chat_template_kwargs"] = {"enable_thinking": self.enable_thinking}
         elif not self.enable_thinking:
-            raise RuntimeError(
-                "llama-cpp-python does not expose chat_template_kwargs; "
-                "cannot enforce enable_thinking=False for Qwen3"
+            raise NotImplementedError(
+                "Local Qwen3 with enable_thinking=False is not yet supported on "
+                "llama-cpp-python (the installed version does not accept "
+                "chat_template_kwargs in create_chat_completion). Two options:\n"
+                "  (1) set enable_thinking=True in settings if you can tolerate "
+                "      Qwen3 thinking tokens leaking into JSON output, or\n"
+                "  (2) wait for the Jinja2ChatFormatter + create_completion "
+                "      fallback path (tracked as BLOCKER.md B15b, planned PR-3+).\n"
+                "Until then, prefer the Anthropic Haiku 4.5 default."
             )
         response = await to_thread(model.create_chat_completion, **kwargs)
         if not isinstance(response, dict):
