@@ -12,17 +12,13 @@
 
 它在本机跑一个小后台，看着你跟 AI 之间的对话流水（Claude Code 的 transcript 文件、ChatGPT 和 Claude.ai 的导出包），从里面挑出技能。颗粒度比"FastAPI"或者"二次函数"细：怎么用 `kubectl describe` 看 pod 的退出码、求根公式什么时候应该改用配方法、Cypher 怎么写 variable-length path。每个技能维护两个独立的数，一个是"用 AI 帮你的时候你能做到什么程度"，另一个是"不靠 AI 自己能做到什么程度"。前者通常很高，后者通常滑得比你想象的快。当后者开始往下走，调度器把它排进今天的 5 道复习题里推到你面前，由 LLM 当场出题，由 LLM 当场判分，再回填两个数。
 
-没有云端，没有遥测，没有账号。
-
 ```bash
 git clone https://github.com/pengw0048/sediment.git
 cd sediment
-uv sync
+uv sync                          # Python 3.11 or 3.12, plus uv
 uv run pke init
-uv run pke serve     # http://127.0.0.1:7421
+uv run pke serve                 # http://127.0.0.1:7421
 ```
-
-需要 Python 3.11 / 3.12 + [uv](https://github.com/astral-sh/uv)，没了。
 
 ## The actual loop
 
