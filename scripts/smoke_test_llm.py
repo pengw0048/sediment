@@ -22,6 +22,7 @@ from typing import Any
 
 from pke.extraction.llm_client import OpenAIClient
 from pke.extraction.prompts import render as render_prompt
+from pke.review.item_gen import ItemGenerator, ReviewItemType
 
 
 def _client() -> OpenAIClient:
@@ -108,6 +109,44 @@ def _assert_gray_band(payload: dict[str, Any]) -> None:
     assert 0.0 <= float(payload.get("confidence", 0.0)) <= 1.0, payload
 
 
+async def _smoke_item_gen(client: OpenAIClient) -> None:
+    generator = ItemGenerator(client=client)
+    skill = "kubernetes resource requests vs limits"
+    evidence = (
+        "USER: My pod keeps OOMKilled.\n" "ASSISTANT fixed it by adding limits: { memory: 512Mi }."
+    )
+    for item_type in (
+        ReviewItemType.REPLAY_SELF_TRY,
+        ReviewItemType.SOCRATIC,
+        ReviewItemType.VARIANT,
+        ReviewItemType.EXPLAIN_BACK,
+    ):
+        print(f"\n=== item_gen: {item_type.value} ===")
+        item = await generator.generate(
+            skill_label=skill,
+            evidence_text=evidence,
+            unaided_mastery=0.3,
+            evidence_count=5,
+            item_type=item_type,
+            recent_outsource_count=3,
+        )
+        print(
+            json.dumps(
+                {
+                    "prompt": item.prompt,
+                    "grader": item.grader,
+                    "oracle": item.oracle,
+                    "hint_path": item.hint_path,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        assert item.prompt, item
+        assert item.grader in {"llm_judge", "regex", "code_exec", "self_report", "manual"}, item
+        assert item.hint_path, item
+
+
 async def main() -> None:
     client = _client()
     failures: list[str] = []
@@ -115,6 +154,7 @@ async def main() -> None:
         ("extract", _smoke_extract),
         ("judge", _smoke_judge),
         ("gray_band", _smoke_gray_band),
+        ("item_gen", _smoke_item_gen),
     ]:
         try:
             await runner(client)
@@ -125,7 +165,7 @@ async def main() -> None:
     if failures:
         print(f"smoke test: {len(failures)} failures")
         sys.exit(1)
-    print("smoke test: all 3 prompts produced schema-conformant JSON")
+    print("smoke test: all prompts produced schema-conformant JSON")
 
 
 if __name__ == "__main__":

@@ -80,8 +80,8 @@ def test_browser_payload_maps_to_event():
     assert event.app == "chatgpt_web"
 
 
-def test_review_item_generation_and_grading():
-    item = ItemGenerator().generate(
+async def test_review_item_generation_and_grading():
+    item = await ItemGenerator().generate(
         skill_label="async context managers",
         evidence_text="why __aenter__",
         unaided_mastery=0.1,
@@ -103,3 +103,48 @@ def test_intervention_levels_and_dismiss_downgrade():
     for _ in range(5):
         decider.record_outcome("dismissed_immediately")
     assert decider.per_source["browser_ext"] == StrengthLevel.GENTLE
+
+
+async def test_item_generator_with_llm_parses_full_payload():
+    """ItemGenerator uses the LLM client when configured and parses its JSON."""
+
+    class _FakeLLM:
+        async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
+            del system, user
+            return {
+                "prompt_to_user": "Walk through 56 x 47.",
+                "grader_kind": "llm_judge",
+                "oracle": {"pass": "2632", "partial": "off by one digit", "fail": "wrong product"},
+                "hint_path": ["Start with 56 * 7.", "Then 56 * 40.", "Add them."],
+                "estimated_minutes": 3,
+            }
+
+    item = await ItemGenerator(client=_FakeLLM()).generate(
+        skill_label="two-digit multiplication",
+        evidence_text="47 x 38",
+        unaided_mastery=0.5,
+        evidence_count=4,
+        item_type=ReviewItemType.VARIANT,
+    )
+    assert item.prompt == "Walk through 56 x 47."
+    assert item.grader == "llm_judge"
+    assert item.oracle is not None
+    assert "2632" in item.oracle
+    assert len(item.hint_path) == 3
+
+
+async def test_item_generator_calibration_is_template_only():
+    """Calibration-only items skip the LLM entirely."""
+
+    class _ForbidLLM:
+        async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
+            raise AssertionError("calibration_only must not call the LLM")
+
+    item = await ItemGenerator(client=_ForbidLLM()).generate(
+        skill_label="kubectl rollout restart",
+        evidence_text="",
+        unaided_mastery=0.0,
+        evidence_count=0,
+    )
+    assert item.item_type == ReviewItemType.CALIBRATION_ONLY
+    assert item.grader == "self_report"
