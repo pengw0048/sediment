@@ -342,23 +342,19 @@ def test_hlr_fit_reduces_loss_on_synthetic_recall_data():
 
     model = HLR()
     initial_predictions = [
-        model.recall_probability(delta_hours=delta, features=feats)
-        for feats, delta, _ in samples
+        model.recall_probability(delta_hours=delta, features=feats) for feats, delta, _ in samples
     ]
     initial_loss = sum(
-        -(1 if rec else 0) * math.log(max(p, 1e-9))
-        - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
+        -(1 if rec else 0) * math.log(max(p, 1e-9)) - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
         for (_, _, rec), p in zip(samples, initial_predictions, strict=True)
     ) / len(samples)
 
     model.fit(samples, max_iter=400)
     fitted_predictions = [
-        model.recall_probability(delta_hours=delta, features=feats)
-        for feats, delta, _ in samples
+        model.recall_probability(delta_hours=delta, features=feats) for feats, delta, _ in samples
     ]
     fitted_loss = sum(
-        -(1 if rec else 0) * math.log(max(p, 1e-9))
-        - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
+        -(1 if rec else 0) * math.log(max(p, 1e-9)) - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
         for (_, _, rec), p in zip(samples, fitted_predictions, strict=True)
     ) / len(samples)
 

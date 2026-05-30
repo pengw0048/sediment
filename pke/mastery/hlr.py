@@ -98,9 +98,7 @@ class HLR:
         deltas = np.array([row[1] for row in samples], dtype=np.float64)
         y = np.array([1.0 if row[2] else 0.0 for row in samples], dtype=np.float64)
         if x_mat.shape[1] != len(self.theta):
-            raise ValueError(
-                f"sample feature dim {x_mat.shape[1]} != theta dim {len(self.theta)}"
-            )
+            raise ValueError(f"sample feature dim {x_mat.shape[1]} != theta dim {len(self.theta)}")
 
         ln2 = math.log(2.0)
 
