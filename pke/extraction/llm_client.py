@@ -123,30 +123,76 @@ class LocalClient:
     async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
         """Run Qwen locally and parse its JSON object response."""
         model = self._llama()
-        kwargs: dict[str, object] = {
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"},
-        }
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
         supports_template_kwargs = (
             "chat_template_kwargs" in signature(model.create_chat_completion).parameters
         )
         if supports_template_kwargs:
-            kwargs["chat_template_kwargs"] = {"enable_thinking": self.enable_thinking}
-        elif not self.enable_thinking:
-            raise NotImplementedError(
-                "Local Qwen3 with enable_thinking=False requires llama-cpp-python "
-                "to accept chat_template_kwargs in create_chat_completion, which "
-                "the installed version does not. Either set enable_thinking=True "
-                "in settings (Qwen3 thinking tokens will appear in JSON output), "
-                "or route through OpenAI-compat (OpenAIClient(base_url=..., "
-                "extra_body={'chat_template_kwargs': {'enable_thinking': False}}))."
+            response = await to_thread(
+                model.create_chat_completion,
+                messages=messages,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+                chat_template_kwargs={"enable_thinking": self.enable_thinking},
             )
-        response = await to_thread(model.create_chat_completion, **kwargs)
+            if not isinstance(response, dict):
+                raise TypeError("streaming local LLM responses are not supported")
+            content = response["choices"][0]["message"]["content"]
+            return dict(json.loads(str(content)))
+
+        rendered = self._render_with_jinja2(model, messages)
+        response = await to_thread(
+            model.create_completion,
+            prompt=rendered,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_tokens=self.context_length // 2,
+            stop=["<|im_end|>", "<|endoftext|>"],
+        )
         if not isinstance(response, dict):
-            raise TypeError("streaming local LLM responses are not supported for JSON completion")
-        content = response["choices"][0]["message"]["content"]
+            raise TypeError("streaming local LLM responses are not supported")
+        content = response["choices"][0]["text"]
         return dict(json.loads(str(content)))
+
+    def _render_with_jinja2(self, model: Any, messages: list[dict[str, str]]) -> str:
+        """Render the chat template by hand so ``enable_thinking`` reaches Jinja.
+
+        Older llama-cpp-python builds drop ``chat_template_kwargs`` on the floor
+        in ``create_chat_completion``; on those, Qwen3 emits its ``<think>``
+        preamble before the JSON body and the parser fails. Pulling the
+        template out of GGUF metadata and feeding it to
+        ``Jinja2ChatFormatter(..., **kwargs)`` ourselves bypasses the upstream
+        gap.
+        """
+        from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+
+        metadata = getattr(model, "metadata", {}) or {}
+        template = metadata.get("tokenizer.chat_template")
+        if not template:
+            sidecar = self.model_path.with_name("qwen3-tokenizer_config.json")
+            if sidecar.exists():
+                template = json.loads(sidecar.read_text()).get("chat_template")
+        if not template:
+            raise RuntimeError(
+                "Qwen3 chat template is not in GGUF metadata and no sidecar "
+                f"tokenizer_config.json was found next to {self.model_path}. "
+                "Re-fetch the model with `pke fetch-local-model` or upgrade "
+                "llama-cpp-python to a build that accepts chat_template_kwargs."
+            )
+        formatter = Jinja2ChatFormatter(
+            template=str(template),
+            eos_token=str(metadata.get("tokenizer.ggml.eos_token") or "<|im_end|>"),
+            bos_token=str(metadata.get("tokenizer.ggml.bos_token") or ""),
+            add_generation_prompt=True,
+        )
+        formatted = formatter(
+            messages=messages,  # type: ignore[arg-type]
+            enable_thinking=self.enable_thinking,
+        )
+        return str(formatted.prompt)
 
     def _llama(self) -> Any:
         if self._model is not None:

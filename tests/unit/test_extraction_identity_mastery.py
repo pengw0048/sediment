@@ -119,25 +119,26 @@ def test_fsrs_scheduler_real_state_transitions():
     assert fail.stability <= second.stability
 
 
-async def test_local_client_raises_clear_error_when_thinking_disabled(monkeypatch):
-    """LocalClient must raise NotImplementedError when thinking is disabled.
+async def test_local_client_errors_when_template_unavailable(monkeypatch):
+    """If the GGUF lacks a chat template AND no sidecar exists, raise a clear error.
 
-    When ``enable_thinking=False`` but llama-cpp-python cannot pass
-    ``chat_template_kwargs``, ``LocalClient`` must raise ``NotImplementedError`` with an
-    actionable message — NOT silently fall back to thinking-on output.
+    The Jinja2 fallback path is the only way to honor ``enable_thinking=False``
+    on older llama-cpp-python builds; without a template it cannot run, and
+    we must surface that with an actionable message rather than silently
+    emitting thinking-token contaminated JSON.
     """
 
     class _FakeLlama:
+        metadata: dict[str, str] = {}
+
         @staticmethod
-        def create_chat_completion(
-            messages, temperature, response_format
-        ):  # no chat_template_kwargs
-            raise AssertionError("should not be invoked when enable_thinking=False is unsupported")
+        def create_chat_completion(messages, temperature, response_format):
+            raise AssertionError("should not be invoked")
 
     monkeypatch.setattr(LocalClient, "_llama", lambda self: _FakeLlama())
 
     client = LocalClient(enable_thinking=False)
-    with pytest.raises(NotImplementedError, match="enable_thinking"):
+    with pytest.raises(RuntimeError, match="Qwen3 chat template"):
         await client.complete_json(system="s", user="u")
 
 
