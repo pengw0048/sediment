@@ -131,3 +131,6 @@ markers = [
   "e2e: end-to-end tests",
 ]
 filterwarnings = ["error"]
+
+[dependency-groups]
+dev = []
