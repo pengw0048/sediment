@@ -135,14 +135,12 @@ class LocalClient:
             kwargs["chat_template_kwargs"] = {"enable_thinking": self.enable_thinking}
         elif not self.enable_thinking:
             raise NotImplementedError(
-                "Local Qwen3 with enable_thinking=False is not yet supported on "
-                "llama-cpp-python (the installed version does not accept "
-                "chat_template_kwargs in create_chat_completion). Two options:\n"
-                "  (1) set enable_thinking=True in settings if you can tolerate "
-                "      Qwen3 thinking tokens leaking into JSON output, or\n"
-                "  (2) wait for the Jinja2ChatFormatter + create_completion "
-                "      fallback path (tracked as BLOCKER.md B15b, planned PR-3+).\n"
-                "Until then, prefer the Anthropic Haiku 4.5 default."
+                "Local Qwen3 with enable_thinking=False requires llama-cpp-python "
+                "to accept chat_template_kwargs in create_chat_completion, which "
+                "the installed version does not. Either set enable_thinking=True "
+                "in settings (Qwen3 thinking tokens will appear in JSON output), "
+                "or route through OpenAI-compat (OpenAIClient(base_url=..., "
+                "extra_body={'chat_template_kwargs': {'enable_thinking': False}}))."
             )
         response = await to_thread(model.create_chat_completion, **kwargs)
         if not isinstance(response, dict):
@@ -169,10 +167,6 @@ class LocalClient:
         return self._model
 
 
-# Note on fallback orchestration: B16's "Anthropic -> OpenAI -> Local" chain
-# is intentionally NOT a custom class here. The standard answer is LiteLLM
-# (which already supports multi-provider fallback, prompt caching, OpenAI-
-# compat base_url, Qwen3 chat_template_kwargs via extra_body, the works).
-# Until we genuinely need cross-provider fallback the OpenAIClient above is
-# enough on its own; when we do, we wire LiteLLM at the App level rather
-# than reinventing chain logic.
+# Cross-provider fallback (try Anthropic, then OpenAI-compat, then local)
+# is delegated to LiteLLM at the App layer; this module exposes the three
+# single-provider clients as building blocks.

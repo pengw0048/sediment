@@ -73,7 +73,7 @@ class ItemGenerator:
             prompt = f"Explain {skill_label} in your own words to a non-expert."
             grader = "llm_judge"
         else:
-            prompt = f"You previously asked about this. Try it yourself:\n\n{evidence_text[:1000]}"
+            prompt = f"You asked about this before. Try it yourself:\n\n{evidence_text[:1000]}"
             grader = "manual"
         return GeneratedItem(
             item_type=chosen,

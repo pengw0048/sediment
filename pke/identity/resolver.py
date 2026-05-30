@@ -135,7 +135,7 @@ class IdentityResolver:
             llm_judge_triggered=judge_triggered,
         )
 
-    def _decide(  # noqa: PLR0911 — five-region dispatch reads better as flat branches
+    def _decide(  # noqa: PLR0911
         self,
         *,
         candidate_name: str,

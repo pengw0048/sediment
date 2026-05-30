@@ -62,10 +62,8 @@ def apply_pending(conn: sqlite3.Connection) -> None:
     for migration in load_migrations():
         if migration.version > version:
             conn.executescript(migration.up_sql)
-            # Some legacy migrations write their own schema_version row inside
-            # the .sql file (idempotent INSERT OR IGNORE). Use OR IGNORE here
-            # too so we never double-insert and so a pre-2026 DB that already
-            # has version=1 keeps working.
+            # Idempotent INSERT OR IGNORE so a migration that bootstraps
+            # schema_version inside its .sql file does not double-insert.
             conn.execute(
                 "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
                 (migration.version, applied_at),

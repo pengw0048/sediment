@@ -1,11 +1,10 @@
 """Bitemporal skill edge helpers.
 
-ARCH-3 invariant: edges are **invalidated** (``t_valid_end`` stamp) rather
-than physically deleted. The public API is :func:`upsert_relates_to` and
-:func:`invalidate_relates_to`. If a maintenance job ever needs to garbage
-collect long-invalidated rows, the deletion lives **inside that job** so a
-reviewer sees the intent in one place — there is no general-purpose edge
-delete in this module.
+Edges are retired by stamping ``t_valid_end`` so the bitemporal history
+stays intact. The public API is :func:`upsert_relates_to` and
+:func:`invalidate_relates_to`. Physical deletion, if a maintenance job
+ever needs it, belongs inside that job rather than as a general-purpose
+helper here.
 """
 
 from __future__ import annotations

@@ -65,16 +65,16 @@ class EvidenceStore:
     def add(self, event: EvidenceEvent) -> IngestResult:
         """Normalize and append one evidence event.
 
-        Two-stage dedup per spec §3.4:
+        Two-stage dedup:
 
         1. ``DUP_EXACT`` — same ``(source, source_session_id, content_hash)``
            already present: the same adapter re-emitting the same row.
         2. ``DUP_MERGED`` — same ``(content_hash, role)`` observed within
-           :data:`_CROSS_SOURCE_WINDOW_SECONDS` by a different adapter: this
-           is the *same logical turn* seen via a second adapter. The first
-           writer's row remains canonical (preserves append-only semantics);
-           the second writer's source is appended to ``metadata.sources_seen``
-           and any new tags are unioned in.
+           :data:`_CROSS_SOURCE_WINDOW_SECONDS` by a different adapter:
+           the same logical turn seen via a second adapter. The existing
+           evidence_events row stays untouched; the second observer is
+           recorded in ``evidence_observers`` keyed by
+           ``(evidence_id, source)``.
         """
         norm = normalize_event(event)
         redacted_content = redact_text(norm.content_text)

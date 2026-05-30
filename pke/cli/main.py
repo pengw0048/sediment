@@ -79,8 +79,7 @@ def daemon(
 
     Registers the canonical job schedule (vacuum, decay, audit, reembed,
     distill) and blocks until ``SIGINT`` or ``SIGTERM``. Use ``Ctrl-C``
-    to stop. The ``--foreground`` flag is currently the only mode; a
-    detached/systemd-managed mode is tracked as a follow-up.
+    to stop.
     """
     import asyncio
 

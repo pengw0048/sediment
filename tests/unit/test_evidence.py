@@ -53,7 +53,7 @@ def test_first_turn_must_be_user_or_tool_result():
 
 
 def test_cross_source_dedup_merges_metadata_not_inserts(app):
-    """B14: second adapter records into evidence_observers, not a duplicate row.
+    """EvidenceStore records a second observer into evidence_observers.
 
     The original evidence_events row stays untouched (append-only).
     """
@@ -89,7 +89,7 @@ def test_cross_source_dedup_merges_metadata_not_inserts(app):
 
 
 def test_cross_source_dedup_respects_window(app):
-    """B14: only events within _CROSS_SOURCE_WINDOW_SECONDS are merged."""
+    """EvidenceStore merges across sources only inside the dedup window."""
     from dataclasses import replace
 
     from pke.evidence.store import _CROSS_SOURCE_WINDOW_SECONDS
@@ -112,7 +112,7 @@ def test_cross_source_dedup_respects_window(app):
 
 
 def test_schema_version_table_records_applied_migrations(app):
-    """M22: each applied migration writes a row into schema_version."""
+    """apply_pending writes one row per applied migration into schema_version."""
     rows = app.sqlite.conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall()
     versions = [row["version"] for row in rows]
     assert 1 in versions
