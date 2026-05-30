@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Admin</h1>
+  <p>Identity stability ARI, LLM cost, drift metrics, and calibration aggregates.</p>
+  <ul>{% for row in rows %}<li>{{ row.metric_name }} {{ row.value }}</li>{% endfor %}</ul>
+</section>
+{% endblock %}

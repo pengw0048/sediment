@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="dashboard">
+  <div class="panel hero">
+    <p class="kicker">Today</p>
+    <h1>Good evening. You outsourced {{ evidence_count }} things today.</h1>
+    <a class="primary" href="/review">Start review</a>
+  </div>
+  <div class="grid-two">
+    <section class="panel">
+      <h2>Review queue</h2>
+      <p>5 items ready for review</p>
+      <ul>
+        <li>Async context managers</li>
+        <li>kubectl rollout history</li>
+        <li>Python dataclasses</li>
+      </ul>
+    </section>
+    <section class="panel">
+      <h2>This week</h2>
+      <p>{{ skill_count }} skills tracked</p>
+      <p aria-label="streak heatmap">▓▓▓░▓▓▓▓▓▓░▓▓▓</p>
+    </section>
+  </div>
+</section>
+{% endblock %}

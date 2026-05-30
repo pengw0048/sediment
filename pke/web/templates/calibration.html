@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Calibration</h1>
+  <p>Trend view updates as review answers accumulate.</p>
+  <ul>
+    {% for row in rows %}
+    <li>{{ row.occurred_at }} · predicted {{ row.predicted }} · actual {{ row.actual }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="review-card" x-data="{rating: null, revealed: false}">
+  <p class="kicker">Review · Item 1 of 5</p>
+  <h1>How confident are you that you'd get it right on your own?</h1>
+  <div class="rating-row" role="radiogroup" aria-label="Predict before reveal">
+    <button @click="rating=1; revealed=true">1<br>No idea</button>
+    <button @click="rating=2; revealed=true">2<br>Vaguely</button>
+    <button @click="rating=3; revealed=true">3<br>Mostly</button>
+    <button @click="rating=4; revealed=true">4<br>Definitely</button>
+  </div>
+  <form x-show="revealed" hx-post="/api/v1/review/answer" hx-swap="outerHTML">
+    <label for="answer">Type or paste your answer</label>
+    <textarea id="answer" name="answer" rows="8"></textarea>
+    <input type="hidden" name="self_rating" x-bind:value="rating">
+    <button class="primary" type="submit">Submit</button>
+  </form>
+</section>
+{% endblock %}

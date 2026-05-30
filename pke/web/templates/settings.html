@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Settings</h1>
+  <h2>Intervention strength</h2>
+  <form>
+    <label>Claude Code <select><option>quiet</option><option>off</option><option>gentle</option><option>active</option></select></label>
+    <label>ChatGPT Web <select><option>gentle</option><option>quiet</option><option>off</option><option>active</option></select></label>
+    <label>Theme <select><option>system</option><option>light</option><option>dark</option></select></label>
+    <label>Mascot <select><option>none</option><option>minimal</option><option>kid</option></select></label>
+  </form>
+  <p>PKE never phones home. This switch does not exist.</p>
+</section>
+{% endblock %}

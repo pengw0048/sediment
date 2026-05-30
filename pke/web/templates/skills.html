@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="split">
+  <aside class="panel">
+    <h1>Skills ({{ skills|length }})</h1>
+    <ul>
+      {% for skill in skills %}
+      <li><a href="/skills/{{ skill.id }}">{{ skill.canonical_name }}</a> <span aria-label="3 of 5, practicing">●●●○○</span></li>
+      {% else %}
+      <li>No skills yet.</li>
+      {% endfor %}
+    </ul>
+  </aside>
+  <section class="panel graph-panel">
+    <h2>Skill graph</h2>
+    <div class="graph" aria-label="secondary skill graph view">●────●──●</div>
+  </section>
+</section>
+{% endblock %}

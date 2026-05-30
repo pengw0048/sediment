@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <a href="/skills">← back</a>
+  {% if skill %}
+  <h1>{{ skill.canonical_name }}</h1>
+  <p>Unaided mastery: <span aria-label="3 of 5, practicing">●●●○○</span></p>
+  <p>Status: {{ skill.user_status }}</p>
+  {% else %}
+  <h1>Skill not found</h1>
+  {% endif %}
+</section>
+{% endblock %}

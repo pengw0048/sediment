@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Evidence</h1>
+  <table>
+    <thead><tr><th>Time</th><th>Source</th><th>Content</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr><td>{{ row.occurred_at }}</td><td>{{ row.source }}</td><td>{{ row.content[:160] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
