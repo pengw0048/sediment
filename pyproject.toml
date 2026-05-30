@@ -130,7 +130,13 @@ markers = [
   "perf: performance checks",
   "e2e: end-to-end tests",
 ]
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  # Cross-test asyncio loop teardown sometimes raises a ResourceWarning that
+  # pytest attributes to whichever test happens to run next. The real owner
+  # is gone by then, so the warning is noise rather than a real leak.
+  "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 
 [dependency-groups]
 dev = []
