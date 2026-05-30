@@ -8,6 +8,6 @@ with AI versus unaided, and brings you back later through short review sessions
 or optional Socratic nudges.
 
 Everything runs on your machine. SQLite plus a local graph view and local
-embeddings. No telemetry, no SaaS, no payment processing. AGPL.
+embeddings. No telemetry, no SaaS, no payment processing. MIT.
 
-GitHub: ...
+GitHub: https://github.com/pengw0048/sediment

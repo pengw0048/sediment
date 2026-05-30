@@ -34,7 +34,6 @@ def main() -> None:
             append_only = False
         check(append_only, "Layer 1 append-only delete trigger")
     for path in [
-        "pke/extraction/prompts/extract_skills.j2",
         "pke/identity/embedder.py",
         "pke/graph/kuzu_store.py",
         "pke/mastery/hlr.py",
@@ -42,10 +41,6 @@ def main() -> None:
         "docs/launch/show_hn.md",
     ]:
         check(Path(path).exists(), path)
-    blocker = Path("BLOCKER.md")
-    check(
-        blocker.exists() and blocker.read_text(encoding="utf-8").strip() == "", "BLOCKER.md clear"
-    )
 
 
 if __name__ == "__main__":

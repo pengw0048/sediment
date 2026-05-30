@@ -11,8 +11,7 @@ actual unaided ability.
   data directory.
 - No telemetry: there is no phone-home path, anonymous ping, hosted edition, or
   data sale.
-- Open source: the engine is AGPL-3.0-or-later; adapter SDK and browser
-  extension are MIT.
+- Open source: everything in this repository is MIT-licensed.
 - Non-blocking: Sediment never rewrites AI responses and never gates the answer
   behind a lesson.
 

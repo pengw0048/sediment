@@ -3,9 +3,9 @@ name = "pke"
 version = "0.1.0"
 description = "Personal Knowledge Engine - close the loop on AI-assisted work."
 readme = "README.md"
-license = { text = "AGPL-3.0-or-later" }
+license = { text = "MIT" }
 requires-python = ">=3.11,<3.13"
-authors = [{ name = "PKE contributors" }]
+authors = [{ name = "Peng Wang" }]
 dependencies = [
   "fastapi>=0.110,<0.116",
   "uvicorn[standard]>=0.29,<0.32",

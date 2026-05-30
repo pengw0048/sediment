@@ -7,7 +7,6 @@ def test_acceptance_files_and_open_source_assets_exist():
     required = [
         "README.md",
         "LICENSE",
-        "LICENSE-ADAPTERS",
         "CONTRIBUTING.md",
         "CODE_OF_CONDUCT.md",
         ".github/FUNDING.yml",
