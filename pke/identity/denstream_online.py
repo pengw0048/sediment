@@ -1,10 +1,10 @@
 """River DenStream wrapper for online identity micro-clustering.
 
-The wrapper is functional but currently has no caller: the online identity
-path in :mod:`pke.identity.resolver` does not yet feed candidate vectors
-through ``OnlineClusterer.partial_fit``. Wire it in when the resolver
-starts using micro-cluster ids to group candidates before LLM merge
-judgement.
+:class:`pke.identity.resolver.IdentityResolver` calls
+:meth:`OnlineClusterer.partial_fit` for every candidate it resolves and
+stores the returned cluster id on the skill_candidates row, so downstream
+batch-cluster and EDC sweeps can group candidates by micro-cluster
+membership rather than recomputing pairwise cosines.
 """
 
 from __future__ import annotations

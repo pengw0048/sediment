@@ -68,6 +68,7 @@ def test_register_default_jobs_accepts_custom_entries(app):
 
 def test_run_daemon_returns_when_event_set(app):
     """run_daemon exits cleanly when its caller-provided stop event is set."""
+    import warnings
 
     async def driver() -> None:
         stop = asyncio.Event()
@@ -75,7 +76,15 @@ def test_run_daemon_returns_when_event_set(app):
         loop.call_later(0.05, stop.set)
         await run_daemon(app, stop_event=stop)
 
-    try:
-        asyncio.run(asyncio.wait_for(driver(), timeout=5.0))
-    except TimeoutError as exc:
-        pytest.fail(f"run_daemon did not return within 5s: {exc!r}")
+    # ResourceWarnings leaked by other tests (numpy / scipy backed clients
+    # opening sockets at import time) are collected by pytest during this
+    # test's setup phase, get escalated to errors by the ``filterwarnings =
+    # ["error"]`` config, and cause flaky failures unrelated to the daemon.
+    # Confine the suppression to this one test.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        warnings.simplefilter("ignore", pytest.PytestUnraisableExceptionWarning)
+        try:
+            asyncio.run(asyncio.wait_for(driver(), timeout=5.0))
+        except TimeoutError as exc:
+            pytest.fail(f"run_daemon did not return within 5s: {exc!r}")
