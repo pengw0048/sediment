@@ -55,8 +55,11 @@ class ExtractionRunner:
 
     async def extract_text(self, text: str) -> list[ExtractedSkill]:
         """Extract skills from raw text."""
+        from pke.extraction.llm_client import call_kind
+
         user_prompt = render_prompt("extract_skills.user.j2", evidence_text=text)
-        payload = await self.client.complete_json(system=SYSTEM_PROMPT, user=user_prompt)
+        with call_kind("extract"):
+            payload = await self.client.complete_json(system=SYSTEM_PROMPT, user=user_prompt)
         return parse_extracted_skills(payload)
 
     async def extract_pending(self, *, limit: int = 100) -> int:

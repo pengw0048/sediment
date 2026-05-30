@@ -121,7 +121,10 @@ class Grader:
             rubric_partial=rubric.get("partial", ""),
             rubric_fail=rubric.get("fail", ""),
         )
-        payload = await self.client.complete_json(system=system, user=user)
+        from pke.extraction.llm_client import call_kind
+
+        with call_kind("judge"):
+            payload = await self.client.complete_json(system=system, user=user)
         grade = str(payload.get("grade", "fail")).lower()
         if grade not in {"pass", "partial", "fail"}:
             grade = "fail"

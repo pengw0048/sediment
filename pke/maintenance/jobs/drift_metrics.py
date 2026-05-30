@@ -82,17 +82,12 @@ def run_ari_week(sqlite: SQLiteStore) -> float | None:
 
 
 def run_llm_cost_30d(sqlite: SQLiteStore) -> float:
-    """Placeholder until llm_call_log exists; writes a 0 with a note."""
-    payload: dict[str, object] = {
-        "note": "llm_call_log not yet implemented; cost reporting disabled"
-    }
-    record_metric(
-        sqlite,
-        metric_name=METRIC_LLM_COST_30D,
-        value=0.0,
-        payload=payload,
-    )
-    return 0.0
+    """Sum cost_usd across the last 30 days of llm_call_log."""
+    from pke.quality.llm_log import sum_cost_usd
+
+    total = sum_cost_usd(sqlite, days=30)
+    record_metric(sqlite, metric_name=METRIC_LLM_COST_30D, value=total)
+    return total
 
 
 def run(app: Any) -> dict[str, object]:

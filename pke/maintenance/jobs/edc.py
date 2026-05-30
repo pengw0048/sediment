@@ -132,18 +132,21 @@ async def _adjudicate_all(
                 )
             )
             continue
-        payload = await client.complete_json(
-            system=render_prompt("edc_verify_merge.system.j2"),
-            user=render_prompt(
-                "edc_verify_merge.user.j2",
-                a_name=pair.a_name,
-                a_definition=a_def,
-                b_name=pair.b_name,
-                b_definition=b_def,
-                name_cosine=pair.name_cosine,
-                def_cosine=def_cosine,
-            ),
-        )
+        from pke.extraction.llm_client import call_kind
+
+        with call_kind("edc"):
+            payload = await client.complete_json(
+                system=render_prompt("edc_verify_merge.system.j2"),
+                user=render_prompt(
+                    "edc_verify_merge.user.j2",
+                    a_name=pair.a_name,
+                    a_definition=a_def,
+                    b_name=pair.b_name,
+                    b_definition=b_def,
+                    name_cosine=pair.name_cosine,
+                    def_cosine=def_cosine,
+                ),
+            )
         verdict = str(payload.get("verdict", "abstain")).lower()
         if verdict not in {"merge", "no_merge", "abstain"}:
             verdict = "abstain"
