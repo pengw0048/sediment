@@ -117,7 +117,7 @@ def test_fsrs_scheduler_real_state_transitions():
     assert fail.stability <= second.stability
 
 
-def test_local_client_raises_clear_error_when_thinking_disabled(monkeypatch):
+async def test_local_client_raises_clear_error_when_thinking_disabled(monkeypatch):
     """B15 contract: LocalClient must raise NotImplementedError when thinking is disabled.
 
     When ``enable_thinking=False`` but llama-cpp-python cannot pass
@@ -134,11 +134,9 @@ def test_local_client_raises_clear_error_when_thinking_disabled(monkeypatch):
 
     monkeypatch.setattr(LocalClient, "_llama", lambda self: _FakeLlama())
 
-    import asyncio
-
     client = LocalClient(enable_thinking=False)
     with pytest.raises(NotImplementedError, match="enable_thinking"):
-        asyncio.run(client.complete_json(system="s", user="u"))
+        await client.complete_json(system="s", user="u")
 
 
 async def test_grade_llm_judge_uses_rubric_and_returns_confidence():
@@ -182,16 +180,12 @@ async def test_grade_llm_judge_falls_back_when_confidence_low():
     assert "low-confidence" in result.feedback
 
 
-def test_grade_llm_judge_raises_when_no_client():
+async def test_grade_llm_judge_raises_when_no_client():
     """B4 contract: missing LLMClient must raise, not silently grade."""
-    import asyncio
-
     grader = Grader(client=None)
     with pytest.raises(RuntimeError, match="LLMClient"):
-        asyncio.run(
-            grader.grade_llm_judge(
-                item_prompt="x", user_answer="y", rubric={"pass": "", "partial": "", "fail": ""}
-            )
+        await grader.grade_llm_judge(
+            item_prompt="x", user_answer="y", rubric={"pass": "", "partial": "", "fail": ""}
         )
 
 
