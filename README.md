@@ -6,32 +6,41 @@ It's good that AI takes over the repetitive parts of our work. Solving a quadrat
 
 The same handoff is harmful in the other direction. When a student hits a concept they actually haven't learned and lets ChatGPT do the problem, the concept never goes in. The same thing happens to a working programmer with a tool they haven't touched in months or a mechanism they never really understood. Every time you let AI think for you on something that wasn't already practiced, the muscle quietly goes.
 
-Sediment tries to split those two cases. While you work with AI, in real time or after the fact, it sorts the observed actions into ones you already have under control (let those pass through) and ones that are either new or that you've been quietly outsourcing for a while (worth doing once on your own). The first category sees no friction. The second category comes back later as a short practice item, at a moment a forgetting model thinks you'd benefit.
+Sediment tries to split those two cases. While you work with AI, it sorts the observed actions into ones you already have under control (let those pass through) and ones that are either new or that you've been quietly outsourcing for a while (worth doing once on your own). The first category sees no friction. The second category comes back later as a short practice item, at a moment a forgetting model thinks you'd benefit.
 
 The hard part is not ingestion. Claude Code has hooks, ChatGPT and Claude.ai expose exports, browser extensions and HTTP proxies are well-understood patterns. The hard part is classifying and indexing the fuzzy thing called a "skill" so that the same underlying action shows up in the same place across very different sessions.
+
+## Get started
 
 ```bash
 git clone https://github.com/pengw0048/sediment.git
 cd sediment
-uv sync                          # Python 3.11 or 3.12, plus uv
-uv run pke init
-uv run pke serve                 # http://127.0.0.1:7421
+uv sync                # Python 3.11 or 3.12, plus uv
+uv run pke init        # one-time: writes ~/.config/pke/ and ~/.local/share/pke/
+uv run pke up          # web app + background listener, in one process
 ```
 
-## Two modes
+Then open **http://127.0.0.1:7421** in a browser.
 
-**Retrospective.** `pke daemon` watches your Claude Code transcripts and the `~/PKE/inbox/` drop folder, distills each session into named skills, and tracks them over time. Open `pke tui` or the web app whenever you have five minutes; the scheduler picks five items that look like they're slipping out of unaided reach, and an LLM writes the prompt on the spot — an explain-back, a variant, a Socratic first-step, or a straight replay.
+What you'll see right after install: an empty dashboard, because no AI activity has been ingested yet. The fastest way to get something in there is to use Claude Code as you normally would — `pke up` is already tailing `~/.claude/transcripts/`, so the first session you wrap up shows up as evidence within a few seconds, extracted into skills within a minute (if an LLM is configured) or as raw evidence rows (if not).
 
-**Real-time intervention (optional).** Before an AI call answers a question that touches a skill the scheduler thinks you're losing, an inline Socratic prompt appears first. Dismiss it with one keystroke and the AI continues. Five dismisses in a row on the same source auto-downgrade interventions for that source for 24 hours, so the feature doesn't become a nag.
+If you'd rather feed it past data first, drop a ChatGPT or Claude.ai export `.json` into `~/PKE/inbox/`; the listener imports it and moves the file to `processed/`. This is the today-only path for any AI surface that isn't Claude Code — the browser-side and HTTP-proxy intercepts are the long-term plan but neither is wired into the daemon yet, so for ChatGPT web sessions you currently still need the export-and-drop flow.
 
-```
-pke serve          web UI
-pke tui            terminal review
-pke review         headless 5-item batch
-pke daemon         tailers + nightly maintenance
-pke export FILE    full backup
-pke wipe           delete everything (config kept unless --purge-config)
-```
+## How a review session works
+
+Once skills are in the database, open `http://127.0.0.1:7421` and pick **Review**. The default queue has 5 items; the scheduler picks them by mixing the forgetting curve, the unaided-mastery gap, recent AI-assist pressure, and a novelty term. Each item is one of four shapes — an explain-back, a near-isomorphic variant, a Socratic first-step, or a straight replay — written on the spot by an LLM if you've configured one.
+
+For each item you predict your own grade first (1-4), then answer, then see the grade and brief feedback. The two mastery numbers per skill (unaided vs functional) update accordingly.
+
+If you have more than 5 minutes, the **Skills** page lists every skill the system is tracking, ranked by how close it is to falling off your unaided reach. You can start a longer session from there, or run `uv run pke review --limit 20` in the terminal for a 20-item batch.
+
+## Realtime intervention — what's actually built
+
+The server-side decider is functional: ARCH-4 anti-annoyance state lives in `intervention_state` and `intervention_log`, the gate chain (deadline mode → daily cap → mastery band → cooldown) works, five-in-a-row dismisses auto-downgrade a source for 24 hours, and the Socratic prompt is generated by an LLM at the moment it's needed.
+
+What's missing is the **trigger**. The endpoint at `/api/v1/intervention/check` is ready, but nothing in the user's actual workflow calls it pre-AI today. Claude Code transcripts arrive after the AI has already replied, so they can't power a before-the-fact intervention. The two ways to actually fire this in real time — browser extension catching the request before it leaves your machine, or HTTP proxy intercepting it on the wire — are the unfinished half of the project.
+
+In other words: Sediment can already retrospectively spot the skills you're outsourcing and replay them as review. The "pause before AI answers" half is API-ready and waiting on a client. If you care about that half, the right contribution is wiring it.
 
 ## LLM (optional)
 
@@ -43,7 +52,7 @@ export PKE_LLM_BASE_URL=http://localhost:8000/v1   # OpenAI-compatible endpoint
 export OPENAI_API_KEY=...                          # gpt-5-mini
 ```
 
-Every call lands in the `llm_call_log` table with provider, model, token counts, latency, and USD cost from the `PRICING` table. Anthropic is the default because Haiku 4.5 is cheap, supports prompt caching, and is strong enough as a judge.
+Every call lands in `llm_call_log` with provider, model, token counts, latency, and USD cost from the `PRICING` table. Anthropic is the default because Haiku 4.5 is cheap, supports prompt caching, and is strong enough as a judge.
 
 ```sql
 SELECT SUM(cost_usd) FROM llm_call_log
@@ -56,14 +65,27 @@ WHERE called_at >= datetime('now', '-30 days');
 |---|---|
 | `~/.local/share/pke/evidence.db` | SQLite: evidence, skills, mastery, review answers, llm_call_log |
 | `~/.local/share/pke/graph/` | Kuzu: skill nodes plus `parent_of` edges from the weekly Leiden run, bitemporal |
-| `~/PKE/inbox/` | Drop ChatGPT / Claude.ai export `.json` here; the daemon imports them |
+| `~/PKE/inbox/` | Manual-import drop folder (ChatGPT / Claude.ai exports) |
 | `~/.config/pke/secret.toml` | API keys; `pke init` creates this `chmod 600` |
+
+## Other commands
+
+`pke up` is the one you'll use day to day. The others are for splitting the process or doing one-off work:
+
+```
+pke serve            web app only (no background listener)
+pke daemon           background listener only (no web app)
+pke tui              terminal review UI
+pke review --limit N headless batch of N items
+pke export FILE      tar.gz backup of the data directory
+pke wipe             delete the data directory (config kept unless --purge-config)
+```
 
 ## What works, what doesn't
 
-Working today: the Claude Code transcript tailer; the `~/PKE/inbox/` archive importer; the review loop through all three UIs (web / TUI / CLI); nightly decay, weekly Leiden, EDC merge sweep; cost-logged Anthropic / OpenAI / local-vLLM LLM endpoints.
+Working today: real-time tailing of Claude Code transcripts; the manual-drop inbox importer; the review loop through all three UIs (web / TUI / CLI); nightly decay, weekly Leiden hierarchy, EDC merge sweep; cost-logged Anthropic / OpenAI / local LLM endpoints; the intervention decider API.
 
-Not working yet: the HTTP proxy adapters (OpenAI / Anthropic) start their servers but don't pass through SSE streams, so streaming chat isn't captured; the browser extension installs but isn't yet wired into the daemon's event stream.
+Not working yet: pre-AI realtime trigger (browser extension installs but isn't wired into the daemon; HTTP proxy adapters serve requests but don't stream SSE through).
 
 Newly written, used by the author, not battle-tested.
 

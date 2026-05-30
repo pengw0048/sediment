@@ -72,6 +72,55 @@ def serve(
 
 
 @app.command()
+def up(
+    host: Annotated[str | None, typer.Option()] = None,
+    port: Annotated[int | None, typer.Option()] = None,
+) -> None:
+    """Start the web app and the background daemon in one process.
+
+    The everyday command. Runs the FastAPI app and the maintenance
+    daemon (cron jobs plus real-time tailers) in the same event loop,
+    so a single Ctrl-C stops both. Use ``pke serve`` or ``pke daemon``
+    separately only if you need to scale one without the other.
+    """
+    import asyncio
+    import contextlib
+
+    import uvicorn
+
+    from pke.maintenance.scheduler import run_daemon
+    from pke.web.main import create_app
+
+    settings = Settings.init_files()
+    pke_app = App.create(settings=settings)
+    web = create_app(settings=settings)
+    config = uvicorn.Config(
+        web,
+        host=host or settings.bind_host,
+        port=port or settings.bind_port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+
+    async def driver() -> None:
+        stop = asyncio.Event()
+        daemon_task = asyncio.create_task(run_daemon(pke_app, stop_event=stop))
+        try:
+            await server.serve()
+        finally:
+            stop.set()
+            with contextlib.suppress(asyncio.CancelledError):
+                await daemon_task
+
+    typer.echo(f"pke up: web on http://{config.host}:{config.port}, daemon attached")
+    try:
+        asyncio.run(driver())
+    finally:
+        pke_app.close()
+    typer.echo("pke up: stopped")
+
+
+@app.command()
 def daemon(
     foreground: Annotated[bool, typer.Option(help="Run in foreground (default).")] = True,
 ) -> None:
