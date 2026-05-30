@@ -164,17 +164,36 @@ def _wrap(job: JobFn, app: Any) -> Callable[[], Awaitable[None]]:
     return runner
 
 
-async def run_daemon(app: Any, *, stop_event: asyncio.Event | None = None) -> None:
-    """Run the scheduler until SIGINT / SIGTERM (or ``stop_event`` fires).
+async def run_daemon(
+    app: Any,
+    *,
+    stop_event: asyncio.Event | None = None,
+    start_adapters_fn: Any = None,
+) -> None:
+    """Run the scheduler + adapter runners until SIGINT / SIGTERM.
 
-    Used by the ``pke daemon`` CLI entry point. Returns cleanly so callers
-    can shut down associated resources (DB connection, etc.).
+    Boots in this order:
 
-    Tests pass a ``stop_event`` they own so they can stop the daemon without
-    sending real signals to the test process.
+    1. The APScheduler with the cron jobs from
+       :func:`default_job_entries`.
+    2. The adapter runtime from :func:`pke.adapters.runner.start_adapters`,
+       which spins up the watchdog-backed tailer / inbox watcher and the
+       queue drainer that pushes events to ``app.evidence.add``.
+
+    Shutdown reverses the order: stop adapters first so they stop
+    feeding the queue, then shut down the scheduler.
+
+    Tests pass ``stop_event`` they own so they can stop the daemon
+    without sending real signals to the test process, and may pass
+    ``start_adapters_fn`` to inject a mock that records lifecycle calls
+    without bringing up real watchdog observers.
     """
+    from pke.adapters.runner import start_adapters as default_start_adapters
+
     scheduler = build_scheduler(app)
     scheduler.start()
+    start_fn = start_adapters_fn or default_start_adapters
+    runtime = await start_fn(app)
     stop = stop_event or asyncio.Event()
     if stop_event is None:
         loop = asyncio.get_running_loop()
@@ -186,6 +205,7 @@ async def run_daemon(app: Any, *, stop_event: asyncio.Event | None = None) -> No
     try:
         await stop.wait()
     finally:
+        await runtime.stop()
         scheduler.shutdown(wait=False)
 
 
