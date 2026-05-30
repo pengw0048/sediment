@@ -72,10 +72,30 @@ def serve(
 
 
 @app.command()
-def daemon(foreground: bool = False) -> None:
-    """Start the local daemon scheduler."""
+def daemon(
+    foreground: Annotated[bool, typer.Option(help="Run in foreground (default).")] = True,
+) -> None:
+    """Start the local maintenance daemon.
+
+    Registers the canonical job schedule (vacuum, decay, audit, reembed,
+    distill) and blocks until ``SIGINT`` or ``SIGTERM``. Use ``Ctrl-C``
+    to stop. The ``--foreground`` flag is currently the only mode; a
+    detached/systemd-managed mode is tracked as a follow-up.
+    """
+    import asyncio
+
+    from pke.maintenance.scheduler import default_job_entries, run_daemon
+
     del foreground
-    typer.echo("daemon ready")
+    settings = Settings.init_files()
+    pke_app = App.create(settings=settings)
+    entries = default_job_entries()
+    typer.echo("daemon starting with " + ", ".join(f"{e.name}@{e.trigger}" for e in entries))
+    try:
+        asyncio.run(run_daemon(pke_app))
+    finally:
+        pke_app.close()
+    typer.echo("daemon stopped")
 
 
 @app.command()

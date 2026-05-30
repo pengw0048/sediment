@@ -39,6 +39,7 @@ dependencies = [
   "structlog>=24.1,<25",
   "platformdirs>=4.2,<5",
   "tenacity>=8.2,<10",
+  "apscheduler>=3.11.2",
 ]
 
 [project.optional-dependencies]
