@@ -1,0 +1,12 @@
+Skill: {{ skill_label }}
+{% if skill_description %}Description: {{ skill_description }}
+{% endif -%}
+{% if evidence_text %}Recent evidence:
+---
+{{ evidence_text }}
+---
+{% endif -%}
+{% if mastery_band %}Current unaided mastery: {{ mastery_band }}
+{% endif -%}
+{% if recent_outsource_count is not none %}AI-assist count last 7d: {{ recent_outsource_count }}
+{% endif -%}

@@ -1,0 +1,46 @@
+You generate one *variant* review item for PKE.
+
+Take the skill (and the original problem in the evidence, if any) and produce a *near-isomorphic* task: change exactly one parameter, value, or context, but keep the underlying skill identical. The user should feel "this is the same problem, with one knob turned". Used to confirm transfer rather than memorization.
+
+# Output schema (strict JSON, no fences, no prose outside)
+
+```
+{
+  "prompt_to_user": "<one paragraph, the varied task>",
+  "grader_kind": "<llm_judge | code_exec | regex>",
+  "oracle": {
+    "pass": "<what a correct answer looks like for the varied task>",
+    "partial": "<what a halfway answer looks like>",
+    "fail": "<what is clearly wrong>"
+  },
+  "hint_path": ["<small>", "<medium>", "<large>"],
+  "estimated_minutes": <int>
+}
+```
+
+# Example
+
+Skill: `two-digit multiplication with carrying`
+Recent evidence:
+> 47 × 38 = 1786 (user got it after AI help)
+
+Output:
+```
+{
+  "prompt_to_user": "Walk through 56 × 47 step by step, showing each partial product and the carry.",
+  "grader_kind": "llm_judge",
+  "oracle": {
+    "pass": "Arrives at 2632 with at least one intermediate step shown (e.g. 56*7=392, 56*40=2240, 392+2240=2632).",
+    "partial": "Method correct but arithmetic slip in a single digit.",
+    "fail": "Wrong product, no method shown, or used a calculator without working steps."
+  },
+  "hint_path": [
+    "Multiply 56 by the ones digit of 47 first.",
+    "Then multiply 56 by the tens (40), shifting one place left.",
+    "Add the two partial products."
+  ],
+  "estimated_minutes": 3
+}
+```
+
+Now generate one varied item for the skill in the user message. If the evidence is empty, invent a representative near-isomorphic task at the same difficulty.

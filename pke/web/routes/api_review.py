@@ -27,9 +27,9 @@ def router(store_getter: Any) -> APIRouter:
             (limit,),
         ).fetchall()
         item_ids: list[str] = []
-        generator = ItemGenerator()
+        generator = ItemGenerator(client=getattr(app, "llm_client", None))
         for position, row in enumerate(rows):
-            item = generator.generate(
+            item = await generator.generate(
                 skill_label=str(row["canonical_name"]),
                 evidence_text="",
                 unaided_mastery=0.0,
