@@ -105,6 +105,65 @@ def test_identity_gray_band_system_prompt_matches_golden() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "template",
+    [
+        "item_gen_replay_self_try.system.j2",
+        "item_gen_socratic.system.j2",
+        "item_gen_variant.system.j2",
+        "item_gen_explain_back.system.j2",
+    ],
+)
+def test_item_gen_system_prompts_match_golden(template: str) -> None:
+    """Pin every item_gen system prompt against drift."""
+    _check_snapshot(template, _GOLDEN_DIR / template.replace(".j2", ".txt"))
+
+
+def test_item_gen_replay_self_try_carries_grader_kind() -> None:
+    """item_gen prompts must enumerate the grader_kind enum so the parser stays in sync."""
+    system = render("item_gen_replay_self_try.system.j2")
+    for term in ("grader_kind", "prompt_to_user", "oracle", "hint_path", "estimated_minutes"):
+        assert term in system, f"item_gen prompt missing required field {term!r}"
+
+
+def test_edc_write_definition_system_prompt_matches_golden() -> None:
+    """edc_write_definition is on the merge nightly path; pin it."""
+    _check_snapshot(
+        "edc_write_definition.system.j2",
+        _GOLDEN_DIR / "edc_write_definition.system.txt",
+    )
+
+
+def test_edc_verify_merge_system_prompt_matches_golden() -> None:
+    """edc_verify_merge gates the auto-merge decision; pin it."""
+    _check_snapshot(
+        "edc_verify_merge.system.j2",
+        _GOLDEN_DIR / "edc_verify_merge.system.txt",
+    )
+
+
+def test_edc_verify_merge_carries_verdict_vocabulary() -> None:
+    """The merge judge's verdict enum is parsed by the EDC job; keep it stable."""
+    system = render("edc_verify_merge.system.j2")
+    for verdict in ("merge", "no_merge", "abstain"):
+        assert verdict in system, f"edc_verify_merge prompt missing verdict {verdict!r}"
+
+
+def test_intervention_socratic_system_prompt_matches_golden() -> None:
+    """intervention_socratic is on the real-time pre-AI path; pin it."""
+    _check_snapshot(
+        "intervention_socratic.system.j2",
+        _GOLDEN_DIR / "intervention_socratic.system.txt",
+    )
+
+
+def test_intervention_socratic_carries_output_schema() -> None:
+    """The intervention prompt parser depends on {question, hint_path}."""
+    system = render("intervention_socratic.system.j2")
+    for field_name in ("question", "hint_path", "rationale"):
+        assert field_name in system
+
+
 def _check_snapshot(template_name: str, golden_path: Path) -> None:
     rendered = render(template_name)
     if os.environ.get("SNAPSHOT_UPDATE") == "1" or not golden_path.exists():
