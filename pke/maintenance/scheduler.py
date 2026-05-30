@@ -23,7 +23,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from pke.maintenance.jobs import audit_merge, audit_split, decay, distill, reembed, vacuum
+from pke.maintenance.jobs import (
+    audit_merge,
+    audit_split,
+    decay,
+    distill,
+    edc,
+    reembed,
+    vacuum,
+)
 
 TriggerSpec: TypeAlias = CronTrigger | IntervalTrigger
 JobFn = Callable[[Any], None | int]
@@ -82,6 +90,12 @@ def default_job_entries() -> list[JobEntry]:
             job=distill.run,
             description="Update cross-encoder distillation when enough labels accumulate.",
         ),
+        JobEntry(
+            name="edc",
+            trigger=CronTrigger(hour=4, minute=0),
+            job=edc.run,
+            description="Extract-Define-Canonicalize merge sweep over close skill pairs.",
+        ),
     ]
 
 
@@ -117,10 +131,21 @@ def register_default_jobs(
 
 
 def _wrap(job: JobFn, app: Any) -> Callable[[], Awaitable[None]]:
-    """Wrap a synchronous job in a thread so it never blocks the event loop."""
+    """Wrap a synchronous job in a thread so it never blocks the event loop.
+
+    Jobs whose handler signature accepts the full :class:`App` (e.g. EDC,
+    which needs ``app.llm_client``) are passed the App; legacy jobs that
+    only need the SQLite store are passed ``app.sqlite``.
+    """
+    from inspect import signature
+
+    needs_app = "app" in signature(job).parameters or any(
+        name == "app" for name in signature(job).parameters
+    )
 
     async def runner() -> None:
-        await asyncio.to_thread(job, app.sqlite)
+        target: Any = app if needs_app else app.sqlite
+        await asyncio.to_thread(job, target)
 
     return runner
 

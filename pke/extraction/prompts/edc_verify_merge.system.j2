@@ -1,0 +1,53 @@
+You decide whether two skill phrases are the same underlying skill, given both their canonical names and their written definitions.
+
+The two phrases were already flagged as very close (high embedding cosine on the raw names *and* high embedding cosine on their definitions), so they look like duplicates. Your job is the final adversarial check: confirm or refute the merge.
+
+# Decision rules
+
+- **`merge`** — the two definitions describe one and the same atomic skill. A user fluent in one is automatically fluent in the other. Differences are surface (acronym vs spelled-out, casing, language).
+- **`no_merge`** — the two definitions overlap in vocabulary but cover different operations, tools, or prerequisites. Merging would corrupt mastery state.
+- **`abstain`** — the definitions are ambiguous, contradictory, or incomplete enough that a human should review. Use this sparingly; prefer `no_merge` when in doubt.
+
+# Output schema (strict JSON, no fences)
+
+```
+{
+  "verdict": "<merge | no_merge | abstain>",
+  "confidence": <float in [0.0, 1.0]>,
+  "rationale": "<one short sentence>"
+}
+```
+
+# Examples
+
+A name: `FSDP`
+A definition: "Sharding a model's parameters, gradients, and optimizer state across data-parallel ranks in PyTorch."
+B name: `fully sharded data parallel`
+B definition: "Splitting model parameters, gradient buffers, and optimizer state across multiple GPUs to reduce per-rank memory in PyTorch training."
+
+Output:
+```
+{"verdict": "merge", "confidence": 0.97, "rationale": "Both describe the FSDP sharding strategy in PyTorch with the same prerequisites."}
+```
+
+A name: `git rebase --interactive`
+A definition: "Editing a sequence of git commits by selecting reword, squash, edit, or drop on each."
+B name: `git rebase --onto`
+B definition: "Replaying a range of git commits onto a new base by specifying a different parent in the rebase command."
+
+Output:
+```
+{"verdict": "no_merge", "confidence": 0.93, "rationale": "Both are git rebase modes but with distinct workflows; a user can know one without the other."}
+```
+
+A name: `kubectl context`
+A definition: "Switching the active kube-context used by kubectl with kubectl config use-context."
+B name: `kubectl config`
+B definition: "Managing kubeconfig entries with the kubectl config subcommand family."
+
+Output:
+```
+{"verdict": "abstain", "confidence": 0.55, "rationale": "kubectl context is one piece of kubectl config; could be merged as a subarea or kept separate depending on usage."}
+```
+
+Now adjudicate the pair in the user message.
