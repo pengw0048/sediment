@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from pke.mastery.selector import ItemSelector
 from pke.review.grader import Grader, GradeResult
 from pke.review.item_gen import ItemGenerator
 from pke.review.session import add_item, answer_item, create_session
@@ -22,18 +23,33 @@ def router(store_getter: Any) -> APIRouter:
         session = create_session(
             app.sqlite, client=str(payload.get("client", "web")), selected_count=limit
         )
-        rows = app.sqlite.conn.execute(
-            "SELECT id, canonical_name FROM skill_nodes WHERE user_status='active' LIMIT ?",
-            (limit,),
+        selector = ItemSelector(sqlite=app.sqlite)
+        candidates = selector.select(limit=limit)
+        if not candidates:
+            return {"session_id": session.id, "items": []}
+        candidate_rows = app.sqlite.conn.execute(
+            f"""
+            SELECT s.id, s.canonical_name, m.unaided_retrievability, m.unaided_reps,
+                   m.outsource_count_7d
+            FROM skill_nodes s
+            JOIN skill_mastery_state m ON m.skill_id = s.id
+            WHERE s.id IN ({",".join("?" * len(candidates))})
+            """,
+            tuple(c.skill_id for c in candidates),
         ).fetchall()
+        by_id = {str(row["id"]): row for row in candidate_rows}
         item_ids: list[str] = []
         generator = ItemGenerator(client=getattr(app, "llm_client", None))
-        for position, row in enumerate(rows):
+        for position, candidate in enumerate(candidates):
+            row = by_id.get(candidate.skill_id)
+            if row is None:
+                continue
             item = await generator.generate(
                 skill_label=str(row["canonical_name"]),
                 evidence_text="",
-                unaided_mastery=0.0,
-                evidence_count=1,
+                unaided_mastery=float(row["unaided_retrievability"] or 0.0),
+                evidence_count=int(row["unaided_reps"] or 0) + 1,
+                recent_outsource_count=int(row["outsource_count_7d"] or 0),
             )
             item_ids.append(
                 add_item(
