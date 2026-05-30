@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pke.db.sqlite import SQLiteStore
 from pke.evidence.models import iso_utc, new_ulid
+from pke.extraction.llm_client import LLMClient
+from pke.extraction.prompts import render as render_prompt
 from pke.identity.ann_index import AnnIndex
 from pke.identity.embedder import Embedder
 
@@ -35,16 +38,39 @@ class ResolveDecision:
     llm_judge_triggered: bool
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class GrayBandVerdict:
+    """LLM judge verdict on a gray-band candidate pair."""
+
+    verdict: str  # merge | new | pending
+    confidence: float
+    rationale: str
+
+
 @dataclass(kw_only=True, slots=True)
 class IdentityResolver:
-    """Resolve extracted candidates into canonical skill nodes."""
+    """Resolve extracted candidates into canonical skill nodes.
+
+    Three regions on cosine similarity to an existing skill node:
+
+    * ``>= merge_threshold`` (default 0.92) — auto-merge.
+    * ``<= gray_lower`` (default 0.78) — auto-create a new skill node.
+    * ``gray_lower < cos < merge_threshold`` — the LLM gray-band judge
+      decides (``merge`` / ``new`` / ``pending``). When ``pending``, the
+      candidate is queued in ``pending_audits`` for human review.
+
+    A judge client is optional: without one, the resolver falls back to
+    the legacy single-threshold behavior so the layer stays usable when
+    no LLM is configured.
+    """
 
     sqlite: SQLiteStore
     embedder: Embedder
     ann: AnnIndex
-    merge_threshold: float = 0.86
+    judge_client: LLMClient | None = field(default=None)
+    merge_threshold: float = 0.92
     gray_lower: float = 0.78
-    gray_upper: float = 0.92
+    legacy_merge_threshold: float = 0.86
 
     def resolve_pending(self, *, limit: int = 100) -> list[ResolveDecision]:
         """Resolve pending skill candidates."""
@@ -59,29 +85,37 @@ class IdentityResolver:
         ).fetchall()
         decisions: list[ResolveDecision] = []
         for row in rows:
-            vector = self.embedder.embed(str(row["normalized_name"]))
-            nearest = self.ann.search(vector, k=1)
-            if nearest and nearest[0][1] >= self.merge_threshold:
-                skill_id = nearest[0][0]
-                action = "merge"
-                similarity = nearest[0][1]
-            else:
-                skill_id = self._create_skill(
-                    name=str(row["normalized_name"]),
-                    description=str(row["description"] or ""),
-                    vector=vector,
-                )
-                action = "new"
-                similarity = nearest[0][1] if nearest else 0.0
-            llm_judge = self.gray_lower <= similarity <= self.gray_upper
-            self.sqlite.conn.execute(
-                """
-                UPDATE skill_candidates
-                SET resolved_skill_id = ?, resolution_state = 'auto', embedding = ?
-                WHERE id = ?
-                """,
-                (skill_id, vector_to_blob(vector), row["id"]),
-            )
+            decisions.append(self._resolve_one(row))
+        self.sqlite.conn.commit()
+        return decisions
+
+    def _resolve_one(self, row: dict[str, object]) -> ResolveDecision:
+        candidate_name = str(row["normalized_name"])
+        candidate_desc = str(row["description"] or "")
+        vector = self.embedder.embed(candidate_name)
+        nearest = self.ann.search(vector, k=1)
+        nearest_id = nearest[0][0] if nearest else None
+        nearest_sim = nearest[0][1] if nearest else 0.0
+
+        action, skill_id, judge_triggered = self._decide(
+            candidate_name=candidate_name,
+            candidate_desc=candidate_desc,
+            vector=vector,
+            nearest_id=nearest_id,
+            nearest_sim=nearest_sim,
+            candidate_id=str(row["id"]),
+        )
+
+        resolution_state = "auto" if action != "pending" else "pending_audit"
+        self.sqlite.conn.execute(
+            """
+            UPDATE skill_candidates
+            SET resolved_skill_id = ?, resolution_state = ?, embedding = ?
+            WHERE id = ?
+            """,
+            (skill_id, resolution_state, vector_to_blob(vector), row["id"]),
+        )
+        if skill_id is not None and action != "pending":
             self.sqlite.conn.execute(
                 """
                 INSERT OR IGNORE INTO skill_evidence_link(
@@ -92,19 +126,129 @@ class IdentityResolver:
                 """,
                 (skill_id, row["id"]),
             )
-            decisions.append(
-                ResolveDecision(
-                    candidate_id=str(row["id"]),
-                    skill_id=skill_id,
-                    action=action,
-                    similarity=similarity,
-                    llm_judge_triggered=llm_judge,
-                )
-            )
-        self.sqlite.conn.commit()
-        return decisions
 
-    def _create_skill(self, *, name: str, description: str, vector: list[float]) -> str:
+        return ResolveDecision(
+            candidate_id=str(row["id"]),
+            skill_id=skill_id or "",
+            action=action,
+            similarity=nearest_sim,
+            llm_judge_triggered=judge_triggered,
+        )
+
+    def _decide(  # noqa: PLR0911 — five-region dispatch reads better as flat branches
+        self,
+        *,
+        candidate_name: str,
+        candidate_desc: str,
+        vector: list[float],
+        nearest_id: str | None,
+        nearest_sim: float,
+        candidate_id: str,
+    ) -> tuple[str, str | None, bool]:
+        if nearest_id is not None and nearest_sim >= self.merge_threshold:
+            return ("merge", nearest_id, False)
+        if nearest_id is None or nearest_sim <= self.gray_lower:
+            return ("new", self._create_skill(candidate_name, candidate_desc, vector), False)
+
+        # Gray band: call the LLM judge if one is configured. Without a judge
+        # we fall back to the legacy single threshold so the layer stays usable.
+        if self.judge_client is None:
+            if nearest_sim >= self.legacy_merge_threshold:
+                return ("merge", nearest_id, False)
+            return ("new", self._create_skill(candidate_name, candidate_desc, vector), False)
+
+        verdict = self._call_gray_band_judge(
+            candidate_name=candidate_name,
+            candidate_desc=candidate_desc,
+            existing_skill_id=nearest_id,
+            cosine=nearest_sim,
+        )
+        if verdict.verdict == "merge":
+            return ("merge", nearest_id, True)
+        if verdict.verdict == "pending":
+            self._enqueue_audit(
+                candidate_id=candidate_id,
+                candidate_name=candidate_name,
+                existing_skill_id=nearest_id,
+                cosine=nearest_sim,
+                verdict=verdict,
+            )
+            return ("pending", nearest_id, True)
+        return ("new", self._create_skill(candidate_name, candidate_desc, vector), True)
+
+    def _call_gray_band_judge(
+        self,
+        *,
+        candidate_name: str,
+        candidate_desc: str,
+        existing_skill_id: str,
+        cosine: float,
+    ) -> GrayBandVerdict:
+        existing = self.sqlite.conn.execute(
+            "SELECT canonical_name, description FROM skill_nodes WHERE id = ?",
+            (existing_skill_id,),
+        ).fetchone()
+        existing_name = str(existing["canonical_name"]) if existing else ""
+        existing_desc = str(existing["description"]) if existing else ""
+
+        system = render_prompt("identity_gray_band.system.j2")
+        user = render_prompt(
+            "identity_gray_band.user.j2",
+            cosine=cosine,
+            candidate_name=candidate_name,
+            candidate_description=candidate_desc or "(no description)",
+            existing_name=existing_name,
+            existing_description=existing_desc or "(no description)",
+        )
+        assert self.judge_client is not None
+        payload = asyncio.run(self.judge_client.complete_json(system=system, user=user))
+        verdict = str(payload.get("verdict", "new")).lower()
+        if verdict not in {"merge", "new", "pending"}:
+            verdict = "new"
+        try:
+            confidence = float(payload.get("confidence", 0.0))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return GrayBandVerdict(
+            verdict=verdict,
+            confidence=confidence,
+            rationale=str(payload.get("rationale", "")),
+        )
+
+    def _enqueue_audit(
+        self,
+        *,
+        candidate_id: str,
+        candidate_name: str,
+        existing_skill_id: str,
+        cosine: float,
+        verdict: GrayBandVerdict,
+    ) -> None:
+        self.sqlite.conn.execute(
+            """
+            INSERT INTO pending_audits(id, audit_type, payload_json, created_at)
+            VALUES (?, 'candidate_review', ?, ?)
+            """,
+            (
+                new_ulid(),
+                json.dumps(
+                    {
+                        "candidate_id": candidate_id,
+                        "candidate_name": candidate_name,
+                        "existing_skill_id": existing_skill_id,
+                        "cosine": cosine,
+                        "judge": {
+                            "verdict": verdict.verdict,
+                            "confidence": verdict.confidence,
+                            "rationale": verdict.rationale,
+                        },
+                    }
+                ),
+                iso_utc(),
+            ),
+        )
+
+    def _create_skill(self, name: str, description: str, vector: list[float]) -> str:
         now = iso_utc()
         skill_id = new_ulid()
         self.sqlite.conn.execute(

@@ -73,6 +73,38 @@ def test_judge_answer_system_prompt_matches_golden() -> None:
     _check_snapshot("judge_answer.system.j2", _GOLDEN_DIR / "judge_answer.system.txt")
 
 
+def test_identity_gray_band_system_prompt_contains_decision_space() -> None:
+    system = render("identity_gray_band.system.j2")
+    for term in ("merge", "new", "pending", "verdict", "confidence", "rationale"):
+        assert term in system, f"identity gray-band prompt missing required term {term!r}"
+
+
+def test_identity_gray_band_user_prompt_passes_pair_through() -> None:
+    rendered = render(
+        "identity_gray_band.user.j2",
+        cosine=0.844,
+        candidate_name="fastapi dependency injection",
+        candidate_description="FastAPI Depends() pattern",
+        existing_name="fastapi depends",
+        existing_description="declarative dependencies",
+    )
+    for token in (
+        "0.8440",
+        "fastapi dependency injection",
+        "FastAPI Depends() pattern",
+        "fastapi depends",
+        "declarative dependencies",
+    ):
+        assert token in rendered
+
+
+def test_identity_gray_band_system_prompt_matches_golden() -> None:
+    _check_snapshot(
+        "identity_gray_band.system.j2",
+        _GOLDEN_DIR / "identity_gray_band.system.txt",
+    )
+
+
 def _check_snapshot(template_name: str, golden_path: Path) -> None:
     rendered = render(template_name)
     if os.environ.get("SNAPSHOT_UPDATE") == "1" or not golden_path.exists():
