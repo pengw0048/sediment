@@ -1,7 +1,5 @@
 # Sediment / 沉淀
 
-[中文 README](README.zh.md)
-
 ## Why this exists
 
 It's good that AI takes over the repetitive parts of our work. Solving a quadratic by hand, writing yet another commit message, untangling a merge conflict — these are things you already know how to do, and delegating them frees up attention for harder problems or things you haven't seen before.
