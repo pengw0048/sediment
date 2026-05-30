@@ -14,7 +14,14 @@ def create_app(*, settings: Settings | None = None):
     from fastapi.staticfiles import StaticFiles
 
     from pke.adapters.browser_ext_endpoint import router as evidence_router
-    from pke.web.routes import api_intervention, api_review, api_settings, api_skills, pages
+    from pke.web.routes import (
+        api_admin,
+        api_intervention,
+        api_review,
+        api_settings,
+        api_skills,
+        pages,
+    )
 
     app_state = App.create(settings=settings)
     web = FastAPI(title="Sediment PKE")
@@ -30,4 +37,5 @@ def create_app(*, settings: Settings | None = None):
     web.include_router(api_skills.router(store_getter))
     web.include_router(api_settings.router(store_getter))
     web.include_router(api_intervention.router(store_getter))
+    web.include_router(api_admin.router(store_getter))
     return web
