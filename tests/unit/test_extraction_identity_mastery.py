@@ -193,3 +193,123 @@ def test_grade_llm_judge_raises_when_no_client():
                 item_prompt="x", user_answer="y", rubric={"pass": "", "partial": "", "fail": ""}
             )
         )
+
+
+def test_resolver_decide_auto_merges_above_threshold():
+    """B5 contract: cosine >= merge_threshold (0.92) auto-merges without LLM."""
+    from unittest.mock import Mock
+
+    from pke.identity.resolver import IdentityResolver
+
+    resolver = IdentityResolver(sqlite=Mock(), embedder=Mock(), ann=Mock(), judge_client=None)
+    action, skill_id, judged = resolver._decide(
+        candidate_name="x",
+        candidate_desc="",
+        vector=[0.1, 0.2],
+        nearest_id="skill-A",
+        nearest_sim=0.95,
+        candidate_id="cand-1",
+    )
+    assert (action, skill_id, judged) == ("merge", "skill-A", False)
+
+
+def test_resolver_decide_creates_new_below_gray_lower(monkeypatch):
+    """B5 contract: cosine <= gray_lower (0.78) creates a new skill without LLM."""
+    from unittest.mock import Mock
+
+    from pke.identity.resolver import IdentityResolver
+
+    monkeypatch.setattr(
+        IdentityResolver, "_create_skill", lambda self, name, description, vector: "skill-NEW"
+    )
+    resolver = IdentityResolver(sqlite=Mock(), embedder=Mock(), ann=Mock(), judge_client=None)
+    action, skill_id, judged = resolver._decide(
+        candidate_name="x",
+        candidate_desc="",
+        vector=[0.1, 0.2],
+        nearest_id="skill-A",
+        nearest_sim=0.55,
+        candidate_id="cand-1",
+    )
+    assert (action, skill_id, judged) == ("new", "skill-NEW", False)
+
+
+def test_resolver_decide_calls_judge_in_gray_band(monkeypatch):
+    """B5 contract: gray-band cosine triggers LLM judge; verdict drives action."""
+    from unittest.mock import Mock
+
+    from pke.identity.resolver import GrayBandVerdict, IdentityResolver
+
+    class _JudgeClient:
+        async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
+            del system, user
+            return {"verdict": "merge", "confidence": 0.85, "rationale": "same"}
+
+    monkeypatch.setattr(
+        IdentityResolver,
+        "_call_gray_band_judge",
+        lambda self, **kw: GrayBandVerdict(verdict="merge", confidence=0.85, rationale="same"),
+    )
+    resolver = IdentityResolver(
+        sqlite=Mock(), embedder=Mock(), ann=Mock(), judge_client=_JudgeClient()
+    )
+    action, skill_id, judged = resolver._decide(
+        candidate_name="x",
+        candidate_desc="",
+        vector=[0.1, 0.2],
+        nearest_id="skill-A",
+        nearest_sim=0.85,
+        candidate_id="cand-1",
+    )
+    assert action == "merge"
+    assert skill_id == "skill-A"
+    assert judged is True
+
+
+def test_resolver_pending_verdict_writes_audit(app):
+    """B5 contract: judge 'pending' verdict writes a candidate_review audit row."""
+    from pke.identity.resolver import GrayBandVerdict, IdentityResolver
+
+    resolver = IdentityResolver(sqlite=app.sqlite, embedder=Embedder(), ann=AnnIndex())
+    resolver._enqueue_audit(
+        candidate_id="cand-1",
+        candidate_name="ambiguous skill",
+        existing_skill_id="skill-A",
+        cosine=0.85,
+        verdict=GrayBandVerdict(verdict="pending", confidence=0.55, rationale="ambiguous"),
+    )
+    app.sqlite.conn.commit()
+    audits = app.sqlite.conn.execute(
+        "SELECT audit_type, payload_json FROM pending_audits WHERE resolved_at IS NULL"
+    ).fetchall()
+    assert any(row["audit_type"] == "candidate_review" for row in audits)
+
+
+def test_resolver_decide_legacy_path_without_judge(monkeypatch):
+    """B5 contract: without a judge client, gray-band falls back to legacy threshold."""
+    from unittest.mock import Mock
+
+    from pke.identity.resolver import IdentityResolver
+
+    monkeypatch.setattr(
+        IdentityResolver, "_create_skill", lambda self, name, description, vector: "skill-NEW"
+    )
+    resolver = IdentityResolver(sqlite=Mock(), embedder=Mock(), ann=Mock(), judge_client=None)
+    action_hi, sid_hi, _ = resolver._decide(
+        candidate_name="x",
+        candidate_desc="",
+        vector=[0.1],
+        nearest_id="skill-A",
+        nearest_sim=0.88,
+        candidate_id="cand-1",
+    )
+    action_lo, sid_lo, _ = resolver._decide(
+        candidate_name="x",
+        candidate_desc="",
+        vector=[0.1],
+        nearest_id="skill-A",
+        nearest_sim=0.82,
+        candidate_id="cand-2",
+    )
+    assert (action_hi, sid_hi) == ("merge", "skill-A")
+    assert (action_lo, sid_lo) == ("new", "skill-NEW")
