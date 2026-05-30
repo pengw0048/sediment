@@ -238,40 +238,63 @@ class LocalClient:
 
     async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
         """Run Qwen locally and parse its JSON object response."""
-        model = self._llama()
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-        supports_template_kwargs = (
-            "chat_template_kwargs" in signature(model.create_chat_completion).parameters
-        )
-        if supports_template_kwargs:
-            response = await to_thread(
-                model.create_chat_completion,
-                messages=messages,
-                temperature=0.0,
-                response_format={"type": "json_object"},
-                chat_template_kwargs={"enable_thinking": self.enable_thinking},
+        started = time.monotonic_ns()
+        try:
+            model = self._llama()
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+            supports_template_kwargs = (
+                "chat_template_kwargs" in signature(model.create_chat_completion).parameters
             )
-            if not isinstance(response, dict):
-                raise TypeError("streaming local LLM responses are not supported")
-            content = response["choices"][0]["message"]["content"]
-            return dict(json.loads(str(content)))
-
-        rendered = self._render_with_jinja2(model, messages)
-        response = await to_thread(
-            model.create_completion,
-            prompt=rendered,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            max_tokens=self.context_length // 2,
-            stop=["<|im_end|>", "<|endoftext|>"],
+            if supports_template_kwargs:
+                response = await to_thread(
+                    model.create_chat_completion,
+                    messages=messages,
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                    chat_template_kwargs={"enable_thinking": self.enable_thinking},
+                )
+                if not isinstance(response, dict):
+                    raise TypeError("streaming local LLM responses are not supported")
+                content = response["choices"][0]["message"]["content"]
+                usage = response.get("usage") or {}
+                result = dict(json.loads(str(content)))
+            else:
+                rendered = self._render_with_jinja2(model, messages)
+                response = await to_thread(
+                    model.create_completion,
+                    prompt=rendered,
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                    max_tokens=self.context_length // 2,
+                    stop=["<|im_end|>", "<|endoftext|>"],
+                )
+                if not isinstance(response, dict):
+                    raise TypeError("streaming local LLM responses are not supported")
+                content = response["choices"][0]["text"]
+                usage = response.get("usage") or {}
+                result = dict(json.loads(str(content)))
+        except Exception as exc:
+            _emit_call_log(
+                provider="local",
+                model=str(self.model_path.name),
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=(time.monotonic_ns() - started) // 1_000_000,
+                error=str(exc),
+            )
+            raise
+        _emit_call_log(
+            provider="local",
+            model=str(self.model_path.name),
+            prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+            latency_ms=(time.monotonic_ns() - started) // 1_000_000,
+            error=None,
         )
-        if not isinstance(response, dict):
-            raise TypeError("streaming local LLM responses are not supported")
-        content = response["choices"][0]["text"]
-        return dict(json.loads(str(content)))
+        return result
 
     def _render_with_jinja2(self, model: Any, messages: list[dict[str, str]]) -> str:
         """Render the chat template by hand so ``enable_thinking`` reaches Jinja.

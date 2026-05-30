@@ -384,6 +384,35 @@ def test_hlr_extract_features_emits_canonical_layout():
     assert vec[7] == 1.0
 
 
+def test_parse_extracted_skills_clamps_out_of_band_confidence():
+    """Out-of-band confidence from the LLM is clamped to [0, 1] before validation."""
+    from pke.extraction.runner import parse_extracted_skills
+
+    skills = parse_extracted_skills(
+        {
+            "skills": [
+                {
+                    "name": "high",
+                    "polarity": "demonstrated",
+                    "confidence": 1.5,
+                    "span_start": 0,
+                    "span_end": 4,
+                },
+                {
+                    "name": "low",
+                    "polarity": "demonstrated",
+                    "confidence": -0.1,
+                    "span_start": 0,
+                    "span_end": 3,
+                },
+            ]
+        }
+    )
+    assert len(skills) == 2
+    assert skills[0].confidence == 1.0
+    assert skills[1].confidence == 0.0
+
+
 def test_clamp01_normalizes_out_of_band_confidence():
     """clamp01 squashes <0 and >1 LLM-supplied confidences into [0, 1]."""
     from pke.extraction.schema import clamp01

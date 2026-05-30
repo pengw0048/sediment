@@ -184,6 +184,67 @@ def test_app_create_wires_sink_to_sqlite(app) -> None:
     assert row["prompt_tokens"] == 500
 
 
+def test_local_client_logs_success_via_sink(monkeypatch) -> None:
+    """LocalClient.complete_json emits one llm_call_log row per successful call."""
+    from pke.extraction.llm_client import LocalClient
+
+    captured: list[dict[str, object]] = []
+    set_call_logger(lambda **kw: captured.append(kw))
+
+    class _FakeLlama:
+        metadata = {
+            "tokenizer.chat_template": "{% for m in messages %}{{ m.content }}{% endfor %}",
+            "tokenizer.ggml.eos_token": "<|im_end|>",
+            "tokenizer.ggml.bos_token": "",
+        }
+
+        def create_chat_completion(
+            self,
+            *,
+            messages,
+            temperature,
+            response_format,
+            chat_template_kwargs=None,
+        ):
+            return {
+                "choices": [{"message": {"content": '{"ok": true}'}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 4},
+            }
+
+    monkeypatch.setattr(LocalClient, "_llama", lambda self: _FakeLlama())
+    client = LocalClient(enable_thinking=True)
+
+    asyncio.run(client.complete_json(system="s", user="u"))
+    set_call_logger(None)
+
+    assert len(captured) == 1
+    assert captured[0]["provider"] == "local"
+    assert captured[0]["prompt_tokens"] == 12
+    assert captured[0]["completion_tokens"] == 4
+    assert captured[0]["error"] is None
+
+
+def test_local_client_logs_error_via_sink(monkeypatch) -> None:
+    """LocalClient failure path also emits one row with the error string."""
+    from pke.extraction.llm_client import LocalClient
+
+    captured: list[dict[str, object]] = []
+    set_call_logger(lambda **kw: captured.append(kw))
+
+    def _boom(self):
+        raise RuntimeError("model file missing")
+
+    monkeypatch.setattr(LocalClient, "_llama", _boom)
+    client = LocalClient(enable_thinking=True)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(client.complete_json(system="s", user="u"))
+    set_call_logger(None)
+    assert len(captured) == 1
+    assert captured[0]["provider"] == "local"
+    assert "model file missing" in str(captured[0]["error"])
+
+
 def test_failed_anthropic_call_logs_error(monkeypatch) -> None:
     """If the LLM call raises, the sink still receives a row with the error string."""
     from pke.extraction.llm_client import AnthropicClient

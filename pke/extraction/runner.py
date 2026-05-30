@@ -9,7 +9,13 @@ from pke.db.sqlite import SQLiteStore
 from pke.evidence.models import iso_utc, new_ulid
 from pke.extraction.llm_client import LLMClient, LocalClient
 from pke.extraction.prompts import render as render_prompt
-from pke.extraction.schema import POLARITY_TO_EVIDENCE_KIND, ExtractedSkill, ExtractedSpan, Polarity
+from pke.extraction.schema import (
+    POLARITY_TO_EVIDENCE_KIND,
+    ExtractedSkill,
+    ExtractedSpan,
+    Polarity,
+    clamp01,
+)
 
 # The extraction system prompt is static, large, and reused on every LLM call
 # in this layer. Render it once at import so the same string is sent every time
@@ -36,7 +42,7 @@ def parse_extracted_skills(payload: dict[str, object]) -> list[ExtractedSkill]:
                 normalized_name=" ".join(raw_name.lower().split()),
                 description=str(item.get("description") or ""),
                 polarity=polarity,
-                confidence=float(item.get("confidence", 0.0)),
+                confidence=clamp01(float(item.get("confidence", 0.0))),
                 span=ExtractedSpan(
                     start=int(item["span_start"]) if item.get("span_start") is not None else None,
                     end=int(item["span_end"]) if item.get("span_end") is not None else None,

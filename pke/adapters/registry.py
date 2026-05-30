@@ -167,6 +167,7 @@ class FileWatcherAdapter(_AdapterBase):
     queue: object = None  # EvidenceQueue
     directory: object = None  # Path
     _observer: object = None
+    _loop: object = None  # asyncio.AbstractEventLoop captured at start()
 
     async def start(self, *, config: AdapterConfig) -> None:
         del config
@@ -174,10 +175,15 @@ class FileWatcherAdapter(_AdapterBase):
             self._state = AdapterState.DEGRADED
             self._detail = "queue/directory not configured"
             return
+        import asyncio
         from pathlib import Path
 
         directory = Path(str(self.directory))
         directory.mkdir(parents=True, exist_ok=True)
+        # Capture the asyncio loop while we're definitely on it, so the
+        # watchdog thread can safely hand work back across the boundary
+        # without depending on the deprecated get_event_loop fallback.
+        self._loop = asyncio.get_running_loop()
         await self._drain_now(directory)
 
         from watchdog.events import FileSystemEventHandler
@@ -206,31 +212,29 @@ class FileWatcherAdapter(_AdapterBase):
             observer.stop()
             observer.join(timeout=5.0)
             self._observer = None
+        self._loop = None
         self._state = AdapterState.STOPPED
 
     def _schedule_drain(self, directory: object) -> None:
         import asyncio
 
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
+        loop = self._loop
+        if loop is None:
             return
         loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._drain_now(directory)))
 
     async def _drain_now(self, directory: object) -> None:
+        """Drain the inbox: parse archives, move files, push events to the queue."""
+        import asyncio
         from pathlib import Path
 
         from pke.adapters.file_watcher import process_inbox_once
 
-        results = await __import__("asyncio").to_thread(process_inbox_once, Path(str(directory)))
-        # process_inbox_once already imported events and moved files;
-        # results are surfaced for health, but the events themselves
-        # are still picked up by their own import paths in the current
-        # codebase. A follow-up can route the EvidenceEvent objects
-        # straight to ``self.queue`` once import_dropin_file is split
-        # into a yielding form.
-        if results:
-            self._events_emitted += sum(r.imported for r in results)
+        results = await asyncio.to_thread(process_inbox_once, Path(str(directory)))
+        for result in results:
+            for event in result.events:
+                await self.queue.put(event)
+                self._events_emitted += 1
 
 
 @dataclass(kw_only=True, slots=True)
@@ -255,13 +259,35 @@ ALL_ADAPTERS: list[type] = [
 ]
 """Every concrete adapter, used by the registry test to enforce coverage."""
 
+ACTIVE_PRODUCERS: list[type] = [
+    ClaudeCodeTailerAdapter,
+    FileWatcherAdapter,
+]
+"""Adapters the daemon actually boots into running producers.
 
-def register(adapter_cls: type) -> None:
-    """Append ``adapter_cls`` to the registry list."""
+Other adapters in :data:`ALL_ADAPTERS` are still driven by their
+free-function call paths (CLI ``pke evidence add``, HTTP proxy handlers,
+the browser extension's ``/api/v1/evidence``). Their presence in
+``ALL_ADAPTERS`` is documentation of the surface this codebase intends
+to cover — calling :func:`pke.adapters.runner.start_adapters` does NOT
+turn them into producers. Move an entry here only after its ``start()``
+becomes a real wire-up.
+"""
+
+
+def register(adapter_cls: type, *, active: bool = False) -> None:
+    """Append ``adapter_cls`` to the registry list.
+
+    Set ``active=True`` to also enroll the class in
+    :data:`ACTIVE_PRODUCERS` so the daemon will call ``start()`` on it.
+    """
     ALL_ADAPTERS.append(adapter_cls)
+    if active:
+        ACTIVE_PRODUCERS.append(adapter_cls)
 
 
 __all__ = [
+    "ACTIVE_PRODUCERS",
     "ALL_ADAPTERS",
     "AdapterConfig",
     "AdapterState",
