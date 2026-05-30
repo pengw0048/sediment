@@ -152,11 +152,11 @@ async def run_daemon(app: Any, *, stop_event: asyncio.Event | None = None) -> No
 
 @dataclass(kw_only=True, slots=True)
 class JobScheduler:
-    """Legacy in-process loop kept for compatibility with older callers.
+    """In-process interval loop used by callers that do not want APScheduler.
 
-    New code uses :func:`build_scheduler` directly. This shim allows the
-    existing call sites (currently none in tree) to keep working until a
-    follow-up PR removes them.
+    The maintenance daemon and the FastAPI lifespan use
+    :func:`build_scheduler` instead. This class is kept for embedding in
+    tests or single-shot scripts where bringing up APScheduler is overkill.
     """
 
     jobs: dict[str, tuple[float, Callable[[], Awaitable[None]]]] = field(default_factory=dict)

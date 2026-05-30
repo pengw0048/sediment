@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pke.db.sqlite import SQLiteStore
 from pke.evidence.models import iso_utc
 from pke.mastery.fsrs import FSRSScheduler
-from pke.mastery.hlr import HLR
+from pke.mastery.hlr import HLR, extract_features
 
 DELTA_TABLE = {
     ("pass", "symbolic", "replay_self_try"): 0.12,
@@ -97,7 +97,21 @@ class MasteryUpdater:
             stability=float(row[stability_col]),
             difficulty=float(row[difficulty_col]),
         )
-        halflife = self.hlr.update_halflife(halflife_h=float(row[halflife_col]), grade=grade)
+        # Per-review halflife is the predicted halflife under the post-FSRS
+        # mastery state, capped by the multiplicative SM-2-style adjustment
+        # used while not enough reviews exist to retrain theta.
+        features = extract_features(
+            {
+                **dict(row),
+                stability_col: fsrs.stability,
+                difficulty_col: fsrs.difficulty,
+            },
+            dimension=dimension,
+        )
+        predicted_halflife = self.hlr.halflife(features)
+        halflife = self.hlr.update_halflife(
+            halflife_h=max(predicted_halflife, float(row[halflife_col])), grade=grade
+        )
         if functional:
             self.sqlite.execute(
                 f"""

@@ -80,7 +80,12 @@ def test_hlr_formula_and_mastery_update(app):
         (skill_id, now),
     )
     app.sqlite.conn.commit()
+    # halflife = exp(0) = 1h, so p(delta=1h) = 2^-1 = 0.5
     assert HLR(theta=[0.0]).recall_probability(delta_hours=1.0, features=[1.0]) == 0.5
+    # Default theta produces ~24h halflife at zero features (only bias=1)
+    default_hlr = HLR()
+    halflife = default_hlr.halflife([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert 20.0 < halflife < 30.0
     MasteryUpdater(sqlite=app.sqlite).update_review(
         skill_id=skill_id,
         grade="pass",
@@ -96,10 +101,7 @@ def test_hlr_formula_and_mastery_update(app):
 
 
 def test_fsrs_scheduler_real_state_transitions():
-    """B8 follow-up: FSRSScheduler must use the real fsrs library.
-
-    Produces 19-parameter FSRS-4.5 transitions and reports sensible stability behavior.
-    """
+    """FSRSScheduler uses the real fsrs library and produces sane stability transitions."""
     scheduler = FSRSScheduler()
     # cold start (no prior state) on a pass should land in learning/review with positive stability
     first = scheduler.schedule(grade="pass", stability=0.0, difficulty=0.0)
@@ -118,7 +120,7 @@ def test_fsrs_scheduler_real_state_transitions():
 
 
 async def test_local_client_raises_clear_error_when_thinking_disabled(monkeypatch):
-    """B15 contract: LocalClient must raise NotImplementedError when thinking is disabled.
+    """LocalClient must raise NotImplementedError when thinking is disabled.
 
     When ``enable_thinking=False`` but llama-cpp-python cannot pass
     ``chat_template_kwargs``, ``LocalClient`` must raise ``NotImplementedError`` with an
@@ -140,7 +142,7 @@ async def test_local_client_raises_clear_error_when_thinking_disabled(monkeypatc
 
 
 async def test_grade_llm_judge_uses_rubric_and_returns_confidence():
-    """B4 contract: Grader.grade_llm_judge calls the LLM with a rubric.
+    """Grader.grade_llm_judge calls the LLM with a rubric.
 
     Parses {grade, confidence, feedback}, and surfaces low-confidence calls.
     """
@@ -161,7 +163,7 @@ async def test_grade_llm_judge_uses_rubric_and_returns_confidence():
 
 
 async def test_grade_llm_judge_falls_back_when_confidence_low():
-    """B4 contract: low-confidence judge calls are flagged for self-report fallback.
+    """Grader flags low-confidence judge calls for self-report fallback.
 
     A judge confidence below LLM_JUDGE_MIN_CONFIDENCE prefixes feedback
     with [low-confidence judge] so callers can degrade to self-report.
@@ -181,7 +183,7 @@ async def test_grade_llm_judge_falls_back_when_confidence_low():
 
 
 async def test_grade_llm_judge_raises_when_no_client():
-    """B4 contract: missing LLMClient must raise, not silently grade."""
+    """Grader.grade_llm_judge raises when no client is configured."""
     grader = Grader(client=None)
     with pytest.raises(RuntimeError, match="LLMClient"):
         await grader.grade_llm_judge(
@@ -190,7 +192,7 @@ async def test_grade_llm_judge_raises_when_no_client():
 
 
 def test_resolver_decide_auto_merges_above_threshold():
-    """B5 contract: cosine >= merge_threshold (0.92) auto-merges without LLM."""
+    """IdentityResolver auto-merges when cosine >= merge_threshold (0.92)."""
     from unittest.mock import Mock
 
     from pke.identity.resolver import IdentityResolver
@@ -208,7 +210,7 @@ def test_resolver_decide_auto_merges_above_threshold():
 
 
 def test_resolver_decide_creates_new_below_gray_lower(monkeypatch):
-    """B5 contract: cosine <= gray_lower (0.78) creates a new skill without LLM."""
+    """IdentityResolver creates a new skill when cosine <= gray_lower (0.78)."""
     from unittest.mock import Mock
 
     from pke.identity.resolver import IdentityResolver
@@ -229,7 +231,7 @@ def test_resolver_decide_creates_new_below_gray_lower(monkeypatch):
 
 
 def test_resolver_decide_calls_judge_in_gray_band(monkeypatch):
-    """B5 contract: gray-band cosine triggers LLM judge; verdict drives action."""
+    """IdentityResolver consults the LLM judge in the gray band and acts on the verdict."""
     from unittest.mock import Mock
 
     from pke.identity.resolver import GrayBandVerdict, IdentityResolver
@@ -261,7 +263,7 @@ def test_resolver_decide_calls_judge_in_gray_band(monkeypatch):
 
 
 def test_resolver_pending_verdict_writes_audit(app):
-    """B5 contract: judge 'pending' verdict writes a candidate_review audit row."""
+    """IdentityResolver queues a candidate_review audit on a 'pending' judge verdict."""
     from pke.identity.resolver import GrayBandVerdict, IdentityResolver
 
     resolver = IdentityResolver(sqlite=app.sqlite, embedder=Embedder(), ann=AnnIndex())
@@ -280,7 +282,7 @@ def test_resolver_pending_verdict_writes_audit(app):
 
 
 def test_resolver_decide_legacy_path_without_judge(monkeypatch):
-    """B5 contract: without a judge client, gray-band falls back to legacy threshold."""
+    """IdentityResolver without a judge client uses the single-threshold fallback."""
     from unittest.mock import Mock
 
     from pke.identity.resolver import IdentityResolver
@@ -307,3 +309,75 @@ def test_resolver_decide_legacy_path_without_judge(monkeypatch):
     )
     assert (action_hi, sid_hi) == ("merge", "skill-A")
     assert (action_lo, sid_lo) == ("new", "skill-NEW")
+
+
+def test_hlr_fit_reduces_loss_on_synthetic_recall_data():
+    """HLR.fit optimises theta against a small synthetic dataset."""
+    import math
+    import random
+
+    from pke.mastery.hlr import HLR
+
+    rng = random.Random(1234)
+    # Generate samples whose true halflife is 48h for "well-learned" features
+    # (recent_pass_rate=1.0, log_reps high) and 6h for "fresh" features.
+    samples: list[tuple[list[float], float, bool]] = []
+    for _ in range(200):
+        is_well_learned = rng.random() < 0.5
+        features = [
+            1.0,  # bias
+            math.log(20.0 if is_well_learned else 1.0),
+            1.0 if is_well_learned else 0.0,
+            math.log(20.0 if is_well_learned else 1.0),
+            math.log(5.0 if is_well_learned else 0.0 + 1.0),
+            3.0 if is_well_learned else 7.0,
+            0.0,
+            0.0,
+        ]
+        true_h = 48.0 if is_well_learned else 6.0
+        delta = rng.uniform(0.5, 24.0)
+        true_p = 2 ** (-delta / true_h)
+        recalled = rng.random() < true_p
+        samples.append((features, delta, recalled))
+
+    model = HLR()
+    initial_predictions = [
+        model.recall_probability(delta_hours=delta, features=feats) for feats, delta, _ in samples
+    ]
+    initial_loss = sum(
+        -(1 if rec else 0) * math.log(max(p, 1e-9)) - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
+        for (_, _, rec), p in zip(samples, initial_predictions, strict=True)
+    ) / len(samples)
+
+    model.fit(samples, max_iter=400)
+    fitted_predictions = [
+        model.recall_probability(delta_hours=delta, features=feats) for feats, delta, _ in samples
+    ]
+    fitted_loss = sum(
+        -(1 if rec else 0) * math.log(max(p, 1e-9)) - (0 if rec else 1) * math.log(max(1 - p, 1e-9))
+        for (_, _, rec), p in zip(samples, fitted_predictions, strict=True)
+    ) / len(samples)
+
+    assert fitted_loss < initial_loss
+
+
+def test_hlr_extract_features_emits_canonical_layout():
+    """extract_features returns a vector matching the FEATURE_NAMES order."""
+    from pke.mastery.hlr import FEATURE_NAMES, extract_features
+
+    row = {
+        "unaided_reps": 5,
+        "unaided_stability": 12.0,
+        "unaided_difficulty": 4.0,
+        "functional_reps": 0,
+        "functional_stability": 0.0,
+        "functional_difficulty": 0.0,
+    }
+    vec = extract_features(row, dimension="unaided", has_parent=True, recent_pass_rate=0.8)
+    assert len(vec) == len(FEATURE_NAMES)
+    # bias must be 1
+    assert vec[0] == 1.0
+    # is_functional must be 0 for the unaided dimension
+    assert vec[6] == 0.0
+    # has_parent must be 1
+    assert vec[7] == 1.0

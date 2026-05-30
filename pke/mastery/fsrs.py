@@ -40,7 +40,7 @@ class FSRSScheduler:
         )
         reviewed = self.scheduler.review_card(card, self._rating_for_grade(grade), review_at)[0]
         due_at = reviewed.due.astimezone(UTC)
-        scheduled_days = max(0, int(round((due_at - review_at).total_seconds() / 86_400)))
+        scheduled_days = max(0, round((due_at - review_at).total_seconds() / 86_400))
         return FSRSResult(
             state=str(reviewed.state.name).lower(),
             stability=float(reviewed.stability or 0.0),

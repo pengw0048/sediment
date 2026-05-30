@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
@@ -49,11 +50,25 @@ def current_version(conn: sqlite3.Connection) -> int:
 
 
 def apply_pending(conn: sqlite3.Connection) -> None:
-    """Apply all pending migrations."""
+    """Apply all pending migrations and record each in ``schema_version``.
+
+    Without the schema_version write, the runner cannot detect what has
+    already been applied — a second migration would silently re-run the
+    first. Idempotent CREATE TABLE IF NOT EXISTS hides the bug until the
+    second migration ships, which is why this is enforced from day 1.
+    """
     version = current_version(conn)
+    applied_at = datetime.now(tz=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     for migration in load_migrations():
         if migration.version > version:
             conn.executescript(migration.up_sql)
+            # Idempotent INSERT OR IGNORE so a migration that bootstraps
+            # schema_version inside its .sql file does not double-insert.
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
+                (migration.version, applied_at),
+            )
+            conn.commit()
             version = migration.version
 
 
@@ -65,3 +80,5 @@ def rollback(conn: sqlite3.Connection, *, steps: int = 1) -> None:
         migration = migrations.get(target)
         if migration is not None and migration.down_sql:
             conn.executescript(migration.down_sql)
+            conn.execute("DELETE FROM schema_version WHERE version = ?", (target,))
+            conn.commit()

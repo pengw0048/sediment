@@ -58,24 +58,50 @@ class AnthropicClient:
 
 @dataclass(kw_only=True, slots=True)
 class OpenAIClient:
-    """OpenAI-compatible JSON client."""
+    """OpenAI-compatible JSON client.
+
+    Works against the official OpenAI API and against any server that
+    exposes the same wire protocol (vLLM, sglang, OpenRouter, local
+    Ollama proxy, the user's own tunnelled Qwen, ...). Override
+    ``base_url`` to point at a non-OpenAI endpoint; set ``api_key_env``
+    to a variable name that contains your key, or to ``None`` if the
+    endpoint requires no auth (common for tunneled local servers).
+
+    ``extra_body`` is forwarded to the underlying request body and is the
+    standard way to pass server-specific knobs such as
+    ``chat_template_kwargs={"enable_thinking": False}`` for Qwen3 family
+    models served by vLLM. Default is ``None``.
+    """
 
     model: str = "gpt-5-mini"
-    api_key_env: str = "OPENAI_API_KEY"
+    api_key_env: str | None = "OPENAI_API_KEY"
+    base_url: str | None = None
+    extra_body: dict[str, object] | None = None
 
     async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
-        """Call OpenAI and parse a JSON object."""
+        """Call OpenAI (or an OpenAI-compatible server) and parse a JSON object."""
         from openai import AsyncOpenAI
 
-        key = os.environ.get(self.api_key_env)
-        if not key:
-            raise RuntimeError(f"{self.api_key_env} is not set")
-        client = AsyncOpenAI(api_key=key)
-        response = await client.chat.completions.create(
-            model=self.model,
-            response_format={"type": "json_object"},
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        )
+        if self.api_key_env is None:
+            # Local or otherwise auth-less endpoint. OpenAI SDK still wants a
+            # non-empty string, so pass a placeholder; the server ignores it.
+            key: str | None = "no-key-required"
+        else:
+            key = os.environ.get(self.api_key_env)
+            if not key:
+                raise RuntimeError(f"{self.api_key_env} is not set")
+        client = AsyncOpenAI(api_key=key, base_url=self.base_url)
+        request_kwargs: dict[str, object] = {
+            "model": self.model,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if self.extra_body is not None:
+            request_kwargs["extra_body"] = self.extra_body
+        response = await client.chat.completions.create(**request_kwargs)  # type: ignore[call-overload]
         content = response.choices[0].message.content or "{}"
         return dict(json.loads(content))
 
@@ -109,14 +135,12 @@ class LocalClient:
             kwargs["chat_template_kwargs"] = {"enable_thinking": self.enable_thinking}
         elif not self.enable_thinking:
             raise NotImplementedError(
-                "Local Qwen3 with enable_thinking=False is not yet supported on "
-                "llama-cpp-python (the installed version does not accept "
-                "chat_template_kwargs in create_chat_completion). Two options:\n"
-                "  (1) set enable_thinking=True in settings if you can tolerate "
-                "      Qwen3 thinking tokens leaking into JSON output, or\n"
-                "  (2) wait for the Jinja2ChatFormatter + create_completion "
-                "      fallback path (tracked as BLOCKER.md B15b, planned PR-3+).\n"
-                "Until then, prefer the Anthropic Haiku 4.5 default."
+                "Local Qwen3 with enable_thinking=False requires llama-cpp-python "
+                "to accept chat_template_kwargs in create_chat_completion, which "
+                "the installed version does not. Either set enable_thinking=True "
+                "in settings (Qwen3 thinking tokens will appear in JSON output), "
+                "or route through OpenAI-compat (OpenAIClient(base_url=..., "
+                "extra_body={'chat_template_kwargs': {'enable_thinking': False}}))."
             )
         response = await to_thread(model.create_chat_completion, **kwargs)
         if not isinstance(response, dict):
@@ -141,3 +165,8 @@ class LocalClient:
             verbose=False,
         )
         return self._model
+
+
+# Cross-provider fallback (try Anthropic, then OpenAI-compat, then local)
+# is delegated to LiteLLM at the App layer; this module exposes the three
+# single-provider clients as building blocks.
