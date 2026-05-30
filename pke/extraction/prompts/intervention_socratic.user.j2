@@ -1,0 +1,7 @@
+Skill: `{{ skill_label }}`
+Source: `{{ source }}`
+User's recent activity around this skill: {{ context_summary or "(no recent context)" }}
+User's current unaided mastery: {{ "%.2f" % unaided_mastery }} (0=cold, 1=fluent)
+
+Produce one short Socratic question with a 3-step hint path. Respond
+with the JSON object only.

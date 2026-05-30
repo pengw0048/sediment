@@ -20,12 +20,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from pke.db.sqlite import SQLiteStore
+from pke.extraction.llm_client import LLMClient
+from pke.extraction.prompts import render as render_prompt
 from pke.intervention.state import (
     DEFAULT_USER_ID,
     InterventionState,
     InterventionStateStore,
 )
 from pke.intervention.strength import InterventionThresholds, StrengthLevel, downgrade
+
+_FALLBACK_HINT_PATH = [
+    "Name the first observable signal.",
+    "Recall a similar task you have already seen.",
+    "Sketch the answer shape, then ask AI for details if needed.",
+]
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -127,6 +135,7 @@ class PersistentInterventionDecider:
     thresholds: InterventionThresholds = field(default_factory=InterventionThresholds)
     user_id: str = DEFAULT_USER_ID
     counters: dict[str, int] = field(default_factory=dict)
+    llm_client: LLMClient | None = field(default=None)
     _store: InterventionStateStore = field(init=False)
 
     def __post_init__(self) -> None:
@@ -171,12 +180,8 @@ class PersistentInterventionDecider:
                 return None
 
         mode = "post_response_toast" if level is StrengthLevel.QUIET else "pre_ai"
-        question = f"Before AI answers, what would you check first for {skill_label}?"
-        hint_path = [
-            "Name the first observable signal.",
-            "Recall a similar task you have already seen.",
-            "Sketch the answer shape, then ask AI for details if needed.",
-        ]
+        question = _fallback_question(skill_label)
+        hint_path = list(_FALLBACK_HINT_PATH)
         self._store.increment_daily(state)
         self._store.record_outcome(
             state,
@@ -194,6 +199,54 @@ class PersistentInterventionDecider:
             skill_id=skill_id,
             question=question,
             hint_path=hint_path,
+        )
+
+    async def should_intervene_async(
+        self,
+        *,
+        source: str,
+        skill_id: str,
+        skill_label: str,
+        unaided_mastery: float,
+        task_type: str = "learn",
+        context_summary: str | None = None,
+        now: datetime | None = None,
+    ) -> InterventionPayload | None:
+        """Like :meth:`should_intervene`, but enrich the payload with an LLM-generated Socratic question.
+
+        Runs the synchronous gate chain first, then — only if the gates
+        green-light the intervention — asks the configured LLM to produce
+        a Socratic question + hint_path tailored to this skill and
+        source. Falls back to the deterministic question if the client
+        is missing or the call raises.
+        """
+        payload = self.should_intervene(
+            source=source,
+            skill_id=skill_id,
+            skill_label=skill_label,
+            unaided_mastery=unaided_mastery,
+            task_type=task_type,
+            now=now,
+        )
+        if payload is None or self.llm_client is None:
+            return payload
+        try:
+            question, hint_path = await _generate_socratic(
+                client=self.llm_client,
+                skill_label=skill_label,
+                source=source,
+                unaided_mastery=unaided_mastery,
+                context_summary=context_summary,
+            )
+        except Exception:
+            return payload
+        return InterventionPayload(
+            mode=payload.mode,
+            strength=payload.strength,
+            skill_id=payload.skill_id,
+            question=question,
+            hint_path=hint_path,
+            bypass_label=payload.bypass_label,
         )
 
     def record_outcome(
@@ -229,6 +282,38 @@ class PersistentInterventionDecider:
     def load_state(self) -> InterventionState:
         """Return the current persisted state (caller-visible snapshot)."""
         return self._store.load(user_id=self.user_id)
+
+
+def _fallback_question(skill_label: str) -> str:
+    return f"Before AI answers, what would you check first for {skill_label}?"
+
+
+async def _generate_socratic(
+    *,
+    client: LLMClient,
+    skill_label: str,
+    source: str,
+    unaided_mastery: float,
+    context_summary: str | None,
+) -> tuple[str, list[str]]:
+    """Render the intervention prompt, call the LLM, and parse the schema."""
+    system = render_prompt("intervention_socratic.system.j2")
+    user = render_prompt(
+        "intervention_socratic.user.j2",
+        skill_label=skill_label,
+        source=source,
+        unaided_mastery=unaided_mastery,
+        context_summary=context_summary,
+    )
+    payload = await client.complete_json(system=system, user=user)
+    question = str(payload.get("question", "")).strip()
+    raw_hint_path = payload.get("hint_path", [])
+    if not isinstance(raw_hint_path, list):
+        raw_hint_path = []
+    hint_path = [str(item).strip() for item in raw_hint_path if str(item).strip()]
+    if not question or not hint_path:
+        raise ValueError("intervention LLM returned empty question or hint_path")
+    return question, hint_path
 
 
 __all__ = [
