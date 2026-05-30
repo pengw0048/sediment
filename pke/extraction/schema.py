@@ -6,6 +6,21 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 
+def clamp01(value: float) -> float:
+    """Clamp ``value`` into ``[0.0, 1.0]`` for LLM-supplied confidences.
+
+    LLM call sites occasionally return out-of-band values (1.5 from a
+    miscalibrated model, -0.01 from a parser rounding error). Pass every
+    LLM-supplied confidence through here before persisting it so the
+    downstream cap and decision thresholds see a well-formed input.
+    """
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
 class Polarity(StrEnum):
     """Extraction polarity from the frozen v1 schema."""
 

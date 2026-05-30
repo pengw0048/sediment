@@ -13,6 +13,7 @@ from pke.config.settings import Settings
 from pke.db.sqlite import SQLiteStore
 from pke.evidence.store import EvidenceStore
 from pke.extraction.llm_client import AnthropicClient, LLMClient, OpenAIClient
+from pke.graph.kuzu_store import KuzuStore
 
 
 @dataclass(kw_only=True, slots=True)
@@ -22,6 +23,7 @@ class App:
     settings: Settings
     sqlite: SQLiteStore
     evidence: EvidenceStore
+    graph: KuzuStore
     llm_client: LLMClient | None = field(default=None)
 
     @classmethod
@@ -30,10 +32,13 @@ class App:
         resolved = settings or Settings.load()
         sqlite = SQLiteStore(path=resolved.evidence_db_path)
         sqlite.initialize()
+        graph = KuzuStore(root=resolved.data_dir / "graph")
+        graph.ensure_schema()
         return cls(
             settings=resolved,
             sqlite=sqlite,
             evidence=EvidenceStore(sqlite=sqlite),
+            graph=graph,
             llm_client=_resolve_llm_client(),
         )
 

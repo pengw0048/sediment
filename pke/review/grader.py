@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pke.extraction.llm_client import LLMClient
 from pke.extraction.prompts import render as render_prompt
+from pke.extraction.schema import clamp01
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -126,7 +127,7 @@ class Grader:
             grade = "fail"
         raw_confidence = payload.get("confidence", 0.0)
         try:
-            confidence = float(raw_confidence)  # type: ignore[arg-type]
+            confidence = clamp01(float(raw_confidence))  # type: ignore[arg-type]
         except (TypeError, ValueError):
             confidence = 0.0
         feedback = str(payload.get("feedback", "")).strip() or grade

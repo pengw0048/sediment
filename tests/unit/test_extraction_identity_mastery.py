@@ -384,6 +384,83 @@ def test_hlr_extract_features_emits_canonical_layout():
     assert vec[7] == 1.0
 
 
+def test_clamp01_normalizes_out_of_band_confidence():
+    """clamp01 squashes <0 and >1 LLM-supplied confidences into [0, 1]."""
+    from pke.extraction.schema import clamp01
+
+    assert clamp01(-0.5) == 0.0
+    assert clamp01(0.0) == 0.0
+    assert clamp01(0.42) == 0.42
+    assert clamp01(1.0) == 1.0
+    assert clamp01(1.5) == 1.0
+
+
+async def test_resolver_pending_verdict_persists_both_tables_end_to_end(app, monkeypatch):
+    """Gray-band ``pending`` verdict writes both skill_candidates and pending_audits.
+
+    Audit found that the schema's resolution_state CHECK constraint did not
+    include 'pending_audit', so the gray-band judge path crashed with an
+    IntegrityError and rolled back the pending_audits write inside the
+    same transaction. This test goes through resolve_pending end-to-end
+    with a judge that returns 'pending', and asserts the candidate row
+    flips to pending_audit AND a candidate_review row lands in
+    pending_audits.
+    """
+    from unittest.mock import AsyncMock
+
+    from pke.identity.resolver import IdentityResolver
+
+    # Seed an existing skill and one fresh candidate to resolve.
+    app.evidence.add(build_manual_event(user="How do I configure FastAPI routes?"))
+    await ExtractionRunner(sqlite=app.sqlite, client=MockLLMClient()).extract_pending()
+    embedder = Embedder()
+    ann = AnnIndex()
+    IdentityResolver(sqlite=app.sqlite, embedder=embedder, ann=ann).resolve_pending()
+
+    app.evidence.add(build_manual_event(user="How do I configure FastAPI routes today?"))
+    await ExtractionRunner(sqlite=app.sqlite, client=MockLLMClient()).extract_pending()
+
+    judge = AsyncMock(
+        complete_json=AsyncMock(
+            return_value={
+                "verdict": "pending",
+                "confidence": 0.55,
+                "rationale": "ambiguous",
+            }
+        )
+    )
+    resolver = IdentityResolver(
+        sqlite=app.sqlite,
+        embedder=embedder,
+        ann=ann,
+        judge_client=judge,
+        merge_threshold=0.95,
+        gray_lower=0.50,
+    )
+
+    # Force the nearest-neighbor similarity into the gray band so the judge
+    # path fires deterministically regardless of the embedder's exact value.
+    existing_skill_id = str(
+        app.sqlite.conn.execute("SELECT id FROM skill_nodes LIMIT 1").fetchone()["id"]
+    )
+    monkeypatch.setattr(
+        ann.__class__,
+        "search",
+        lambda self, vector, k=1: [(existing_skill_id, 0.82)],
+    )
+
+    resolver.resolve_pending()
+
+    pending_state_count = app.sqlite.conn.execute(
+        "SELECT COUNT(*) AS c FROM skill_candidates WHERE resolution_state = 'pending_audit'"
+    ).fetchone()["c"]
+    assert pending_state_count >= 1, "gray-band pending must mark skill_candidates pending_audit"
+    audit_rows = app.sqlite.conn.execute(
+        "SELECT audit_type FROM pending_audits WHERE audit_type = 'candidate_review'"
+    ).fetchall()
+    assert len(audit_rows) >= 1, "pending_audits must keep a candidate_review row"
+
+
 async def test_resolver_writes_micro_cluster_id_when_online_clusterer_provided(app):
     """IdentityResolver writes DenStream's cluster id to skill_candidates."""
     from pke.identity.denstream_online import OnlineClusterer
