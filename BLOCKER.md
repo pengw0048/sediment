@@ -617,5 +617,5 @@ audit workflow 复审 prompt：参考 `~/sediment_audit.md` 顶部 `COMMON_INSTR
 
 ### Q-1: B20/B8 FSRS dependency name/version is unsatisfiable on PyPI
 - 影响：B20 CI 真 `uv sync --all-extras`；B8 py-fsrs 接入。
-- 你的倾向：选 A：用 `fsrs>=4,<5` 作为最接近 spec 的可安装 4.x 包；`py-fsrs` 是项目名，但 PyPI/module 名是 `fsrs`，且上游没有 4.5.x tag。
-- 默认动作（如果用户不答）：PR-1 先把 pyproject 改为 `fsrs>=4,<5` 让 CI 能真同步依赖；PR-2 再验证并接入实际 `fsrs` API。
+- 你的倾向：选 A：继续用 `fsrs>=4,<5` 作为最接近 spec 的可安装 4.x 包；`py-fsrs` 是项目名，但 PyPI/module 名是 `fsrs`，且 `uv add 'fsrs>=4.5,<5'` 实测无解（只有 `<4.5` 或 `>=5`）。
+- 默认动作（如果用户不答）：PR-2 用 `fsrs==4.1.2` 的真实 `Scheduler` / `Card` / `Rating` API 删除 toy scheduler；后续若上游发布 4.5.x 再收紧 pin。
