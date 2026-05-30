@@ -41,14 +41,46 @@ def test_extraction_user_prompt_passes_evidence_through_verbatim() -> None:
 
 
 def test_extraction_system_prompt_matches_golden() -> None:
-    rendered = render("extract_skills.system.j2")
-    golden_path = _GOLDEN_DIR / "extract_skills.system.txt"
+    _check_snapshot("extract_skills.system.j2", _GOLDEN_DIR / "extract_skills.system.txt")
+
+
+def test_judge_answer_system_prompt_contains_frozen_terms() -> None:
+    system = render("judge_answer.system.j2")
+    for term in ("pass", "partial", "fail", "confidence", "rubric"):
+        assert term in system, f"judge prompt missing required term {term!r}"
+
+
+def test_judge_answer_user_prompt_passes_rubric_through() -> None:
+    rendered = render(
+        "judge_answer.user.j2",
+        item_prompt="What is FastAPI's Depends() for?",
+        user_answer="declarative dependencies",
+        rubric_pass="names DI",
+        rubric_partial="mentions FastAPI only",
+        rubric_fail="off-topic",
+    )
+    for token in (
+        "FastAPI's Depends()",
+        "declarative dependencies",
+        "names DI",
+        "mentions FastAPI only",
+        "off-topic",
+    ):
+        assert token in rendered
+
+
+def test_judge_answer_system_prompt_matches_golden() -> None:
+    _check_snapshot("judge_answer.system.j2", _GOLDEN_DIR / "judge_answer.system.txt")
+
+
+def _check_snapshot(template_name: str, golden_path: Path) -> None:
+    rendered = render(template_name)
     if os.environ.get("SNAPSHOT_UPDATE") == "1" or not golden_path.exists():
         golden_path.write_text(rendered, encoding="utf-8")
         pytest.skip(f"snapshot written to {golden_path}")
     expected = golden_path.read_text(encoding="utf-8")
     assert rendered == expected, (
-        "extract_skills.system.j2 rendering changed.\n"
-        "If intentional, regenerate with SNAPSHOT_UPDATE=1 pytest "
-        "tests/snapshots/test_prompt_snapshots.py."
+        f"{template_name} rendering changed.\n"
+        f"If intentional, regenerate with SNAPSHOT_UPDATE=1 pytest "
+        f"tests/snapshots/test_prompt_snapshots.py."
     )
