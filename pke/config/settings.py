@@ -55,6 +55,8 @@ merge_threshold      = 0.86
 candidate_threshold  = 0.74
 denstream_lambda     = 0.0006
 denstream_eps        = 0.18
+denstream_beta       = 0.75
+denstream_mu         = 2.0
 
 [mastery]
 review_items_per_day = 5
