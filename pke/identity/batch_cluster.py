@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+import igraph as ig
+
 
 def adjusted_rand_index(labels_a: list[int], labels_b: list[int]) -> float:
     """Compute a compact Adjusted Rand Index implementation."""
@@ -35,25 +37,25 @@ def adjusted_rand_index(labels_a: list[int], labels_b: list[int]) -> float:
 
 
 def leiden_hierarchy(edges: list[tuple[str, str, float]]) -> dict[str, list[str]]:
-    """Produce a deterministic connected-component hierarchy."""
-    parent: dict[str, str] = {}
-
-    def find(node: str) -> str:
-        parent.setdefault(node, node)
-        if parent[node] != node:
-            parent[node] = find(parent[node])
-        return parent[node]
-
-    def union(a: str, b: str) -> None:
-        ra = find(a)
-        rb = find(b)
-        if ra != rb:
-            parent[max(ra, rb)] = min(ra, rb)
-
-    for src, dst, weight in edges:
-        if weight >= 0.3:
-            union(src, dst)
-    groups: dict[str, list[str]] = defaultdict(list)
-    for node in list(parent):
-        groups[find(node)].append(node)
-    return {root: sorted(nodes) for root, nodes in sorted(groups.items())}
+    """Cluster centroid graph with igraph Leiden over cosine-weighted edges."""
+    nodes = sorted({node for edge in edges for node in edge[:2]})
+    if not nodes:
+        return {}
+    graph = ig.Graph()
+    graph.add_vertices(nodes)
+    weighted_edges = [(src, dst, weight) for src, dst, weight in edges if weight > 0.7]
+    if weighted_edges:
+        graph.add_edges([(src, dst) for src, dst, _ in weighted_edges])
+        graph.es["weight"] = [weight for _, _, weight in weighted_edges]
+        partition = graph.community_leiden(
+            weights="weight",
+            resolution=1.0,
+            n_iterations=10,
+        )
+        memberships = partition.membership
+    else:
+        memberships = list(range(len(nodes)))
+    groups: dict[int, list[str]] = defaultdict(list)
+    for vertex, cluster_id in zip(graph.vs, memberships, strict=True):
+        groups[int(cluster_id)].append(str(vertex["name"]))
+    return {min(members): sorted(members) for members in groups.values()}
