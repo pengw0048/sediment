@@ -39,9 +39,21 @@ class MockLLMClient:
     """
 
     async def complete_json(self, *, system: str, user: str) -> dict[str, object]:
+        if "review item for PKE" in system:
+            return self._item_gen(system=system, user=user)
         if "review-answer judge" in system or "Item prompt:" in user:
             return self._judge(system=system, user=user)
         return self._extract(system=system, user=user)
+
+    def _item_gen(self, *, system: str, user: str) -> dict[str, object]:
+        del system, user
+        return {
+            "prompt_to_user": "Mock review prompt: describe the skill in your own words.",
+            "oracle": '{"pass": "covers the key idea"}',
+            "grader_kind": "self_report",
+            "hints": [],
+            "rationale": "mock item_gen",
+        }
 
     def _extract(self, *, system: str, user: str) -> dict[str, object]:
         confidence = 0.8 if system else 0.5
