@@ -53,6 +53,27 @@ class EvidenceModality(StrEnum):
     TOOL_IO = "tool_io"
 
 
+@dataclass(kw_only=True, slots=True, frozen=True)
+class ToolCallRecord:
+    """One function/tool call captured alongside an evidence event.
+
+    Adapters that observe streaming tool-call deltas (currently the
+    OpenAI proxy's chat-completions and responses endpoints) reassemble
+    the deltas into one of these records per slot. The structured field
+    is the primary source for downstream consumers; the legacy
+    ``[tool_call name(args)]`` text suffix on the assistant turn stays
+    around for human-readable evidence views but is no longer the only
+    place tool-call info lives.
+    """
+
+    name: str
+    arguments: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable representation."""
+        return {"name": self.name, "arguments": self.arguments}
+
+
 @dataclass(kw_only=True, slots=True)
 class EvidenceTurn:
     """One message inside a conversation turn."""
@@ -102,6 +123,7 @@ class EvidenceEvent:
     locale: str | None = None
     tags: list[str] = field(default_factory=list)
     extra: dict[str, str] = field(default_factory=dict)
+    tool_calls: list[ToolCallRecord] = field(default_factory=list)
 
     @property
     def content_text(self) -> str:
@@ -134,6 +156,7 @@ class EvidenceEvent:
             "tags": self.tags,
             "extra": self.extra,
             "turns": [turn.to_dict() for turn in self.turns],
+            "tool_calls": [tc.to_dict() for tc in self.tool_calls],
         }
 
 
