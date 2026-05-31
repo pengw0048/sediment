@@ -324,8 +324,54 @@
     );
   }
 
+  // Selector mode flips to "fallback" when the dead-DOM watchdog
+  // detects the primary site selectors no longer match. In fallback
+  // mode the broader `fallbackTurnSelector` finds candidate nodes and
+  // a role heuristic decides whether each one is user or assistant.
+  let selectorMode = "primary";
+
+  function probeRoleFromFallback(node) {
+    // Direct attribute on the node or any descendant (the ChatGPT
+    // pattern: data-message-author-role).
+    const roled =
+      (node.getAttribute && node.getAttribute("data-message-author-role")) ||
+      (node.querySelector &&
+        node.querySelector("[data-message-author-role]") &&
+        node
+          .querySelector("[data-message-author-role]")
+          .getAttribute("data-message-author-role"));
+    if (roled === "user") return "user";
+    if (roled === "assistant") return "assistant";
+    // Class-name heuristic: many sites name wrappers with a role
+    // token. Conservative match on whole words.
+    const className = String((node.className && node.className.toString()) || "");
+    if (/\b(user|human|prompt|you)\b/i.test(className)) return "user";
+    if (/\b(assistant|model|ai-response|response|answer)\b/i.test(className)) {
+      return "assistant";
+    }
+    return null;
+  }
+
+  function inspectInFallback(node) {
+    if (!(node instanceof HTMLElement)) return;
+    if (!PROFILE.fallbackTurnSelector) return;
+    const route = (candidate) => {
+      const role = probeRoleFromFallback(candidate);
+      if (role === "user") handleUserTurn(candidate);
+      else if (role === "assistant") handleAssistantTurn(candidate);
+    };
+    if (node.matches && node.matches(PROFILE.fallbackTurnSelector)) route(node);
+    if (node.querySelectorAll) {
+      node.querySelectorAll(PROFILE.fallbackTurnSelector).forEach(route);
+    }
+  }
+
   function inspectNode(node) {
     if (!(node instanceof HTMLElement)) return;
+    if (selectorMode === "fallback") {
+      inspectInFallback(node);
+      return;
+    }
     // Top-level node may itself be a user or assistant wrapper.
     if (node.matches && node.matches(PROFILE.userSelector)) {
       handleUserTurn(node);
@@ -387,14 +433,17 @@
 
   // ---------------------------------------------------------------
   // Dead-DOM watchdog. Sites mutate their data attributes regularly;
-  // when the primary selector finds zero matches we want to surface a
-  // warning before the user notices missing capture. Every 10 s we
-  // re-scan; if the primary selector has matched nothing the whole
-  // interval and the per-site `fallbackTurnSelector` does match at
-  // least one node, we log via the ISOLATED-world bridge so the
-  // background page can persist it.
+  // when the primary selector stops matching but the broader
+  // `fallbackTurnSelector` still finds nodes, we switch capture to
+  // fallback mode after a short confirmation window (30 s of
+  // consecutive misses) and start routing via `probeRoleFromFallback`.
+  // The first dead interval logs a warning so the developer can
+  // inspect; the activation logs again so it's clear capture has
+  // degraded. If the primary selector ever matches again, we swap
+  // back automatically.
   if (PROFILE.fallbackTurnSelector) {
     let consecutiveZeroIntervals = 0;
+    let warnedThisWindow = false;
     const watchdog = () => {
       const primaryMatches =
         document.querySelectorAll(
@@ -405,8 +454,8 @@
       ).length;
       if (primaryMatches === 0 && fallbackMatches > 0) {
         consecutiveZeroIntervals += 1;
-        if (consecutiveZeroIntervals === 1) {
-          // Fire once per dead-DOM window so we don't spam the log.
+        if (!warnedThisWindow) {
+          warnedThisWindow = true;
           window.postMessage(
             {
               __pke_log__: true,
@@ -420,8 +469,37 @@
             window.location.origin,
           );
         }
+        if (consecutiveZeroIntervals >= 3 && selectorMode === "primary") {
+          selectorMode = "fallback";
+          window.postMessage(
+            {
+              __pke_log__: true,
+              level: "warn",
+              event: "pke_selector_fallback_activated",
+              site: PROFILE.id,
+              fallbackMatches,
+              url: location.href,
+            },
+            window.location.origin,
+          );
+          inspectInFallback(document.documentElement);
+        }
       } else if (primaryMatches > 0) {
         consecutiveZeroIntervals = 0;
+        warnedThisWindow = false;
+        if (selectorMode === "fallback") {
+          selectorMode = "primary";
+          window.postMessage(
+            {
+              __pke_log__: true,
+              level: "info",
+              event: "pke_selector_primary_restored",
+              site: PROFILE.id,
+              url: location.href,
+            },
+            window.location.origin,
+          );
+        }
       }
     };
     setInterval(watchdog, 10000);
