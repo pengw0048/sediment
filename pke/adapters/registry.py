@@ -118,7 +118,6 @@ class ClaudeCodeTailerAdapter(_AdapterBase):
 
     async def start(self, *, config: AdapterConfig) -> None:
         """Boot a TailWatcher over ``self.directory`` if it's set."""
-        del config
         if self.queue is None or self.directory is None:
             self._state = AdapterState.DEGRADED
             self._detail = "queue/directory not configured"
@@ -149,7 +148,21 @@ class ClaudeCodeTailerAdapter(_AdapterBase):
             )
 
         directory = Path(str(self.directory))
-        watcher = TailWatcher(directory, handler=handler)
+        # ``skip_backlog_older_than_hours`` flows in via the adapter's
+        # options bag (sourced from ``[adapters.claude_code_tailer]`` in
+        # config.toml); fall back to the watcher's own default if the
+        # caller did not thread it through.
+        options = config.options if config is not None else {}
+        skip_hours_raw: object = options.get("skip_backlog_older_than_hours", 24.0)
+        try:
+            skip_hours: float | None = float(skip_hours_raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            skip_hours = 24.0
+        watcher = TailWatcher(
+            directory,
+            handler=handler,
+            skip_backlog_older_than_hours=skip_hours,
+        )
         watcher.start()
         self._watcher = watcher
         self._state = AdapterState.RUNNING

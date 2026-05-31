@@ -5,7 +5,10 @@
     <th scope="row">
       <a href="/skills/{{ skill.id }}">{{ skill.canonical_name }}</a>
     </th>
-    <td data-col="unaided">{{ "%.2f"|format(skill.unaided_mastery or 0.0) }}</td>
+    <td data-col="unaided">
+      <span class="band-glyph" title="{{ skill.band_label }}">{{ skill.band_glyph }}</span>
+      {{ "%.2f"|format(skill.unaided_mastery or 0.0) }}
+    </td>
     <td data-col="functional">{{ "%.2f"|format(skill.functional_mastery or 0.0) }}</td>
     <td data-col="last-reviewed">
       {% if skill.last_reviewed_at %}{{ skill.last_reviewed_at }}{% else %}never{% endif %}

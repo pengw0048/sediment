@@ -269,3 +269,82 @@ def test_failed_anthropic_call_logs_error(monkeypatch) -> None:
     set_call_logger(None)
     assert len(captured) == 1
     assert "upstream 500" in str(captured[0]["error"])
+
+
+def test_failed_openai_call_logs_error(monkeypatch) -> None:
+    """OpenAI failure path also logs the error to the sink.
+
+    Symmetric to ``test_failed_anthropic_call_logs_error``: if the
+    upstream chat.completions.create coroutine raises, the
+    ``_emit_call_log`` inside OpenAIClient still emits one row with
+    the error string and the original exception still propagates to
+    the caller.
+    """
+    from pke.extraction.llm_client import OpenAIClient
+
+    captured: list[dict[str, object]] = []
+    set_call_logger(lambda **kw: captured.append(kw))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    class _BoomCompletions:
+        async def create(self, **_kw):
+            raise RuntimeError("upstream 500")
+
+    class _BoomChat:
+        def __init__(self) -> None:
+            self.completions = _BoomCompletions()
+
+    class _BoomClient:
+        def __init__(self, *_a, **_k):
+            self.chat = _BoomChat()
+
+    monkeypatch.setattr("openai.AsyncOpenAI", _BoomClient)
+
+    client = OpenAIClient()
+    with pytest.raises(RuntimeError):
+        asyncio.run(client.complete_json(system="s", user="u"))
+    set_call_logger(None)
+    assert len(captured) == 1
+    assert captured[0]["provider"] == "openai"
+    assert "upstream 500" in str(captured[0]["error"])
+
+
+@pytest.mark.asyncio
+async def test_call_kind_context_var_isolates_parallel_tasks() -> None:
+    """Two ``call_kind`` blocks running under ``asyncio.gather`` keep their own kind.
+
+    ``_CALL_KIND`` is a :class:`contextvars.ContextVar`, which means a
+    write inside one Task does not leak into a sibling Task spawned
+    by ``asyncio.gather``. This test pins that invariant: replace the
+    ContextVar with a module-global ``str`` and this test starts to
+    fail because both tasks would see whichever kind was set last.
+    """
+    from pke.extraction.llm_client import _emit_call_log
+
+    captured: list[dict[str, object]] = []
+    set_call_logger(lambda **kw: captured.append(kw))
+
+    async def do_call(kind: str) -> str:
+        with call_kind(kind):
+            # Yield to the scheduler so the other Task gets a chance
+            # to clobber the ContextVar if isolation is broken.
+            await asyncio.sleep(0)
+            _emit_call_log(
+                provider="test",
+                model="m",
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=0,
+                error=None,
+            )
+            return kind
+
+    try:
+        await asyncio.gather(do_call("extract"), do_call("judge"))
+    finally:
+        set_call_logger(None)
+
+    kinds = sorted(str(rec["call_kind"]) for rec in captured)
+    assert kinds == ["extract", "judge"], (
+        f"ContextVar isolation broken; got {kinds!r}"
+    )

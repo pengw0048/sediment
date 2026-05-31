@@ -85,6 +85,15 @@ class IdentityResolver:
     A judge client is optional: without one, the resolver falls back to
     the legacy single-threshold behavior so the layer stays usable when
     no LLM is configured.
+
+    Leaky-bucket guard: ``daily_new_skill_cap`` limits how many new
+    skill nodes the resolver may auto-create per UTC day. Once the cap
+    is reached, "new" decisions are demoted to ``pending`` and the
+    blocked candidate is queued in ``pending_audits`` with a
+    ``candidate_review`` audit type and ``reason='leaky_bucket_block'``
+    in its payload. Without this guard a noisy extraction run could
+    flood the skill graph with thousands of low-value nodes in a single
+    day. Set to ``0`` to disable.
     """
 
     sqlite: SQLiteStore
@@ -95,6 +104,7 @@ class IdentityResolver:
     merge_threshold: float = 0.92
     gray_lower: float = 0.78
     legacy_merge_threshold: float = 0.86
+    daily_new_skill_cap: int = 50
 
     def resolve_pending(self, *, limit: int = 100) -> list[ResolveDecision]:
         """Resolve pending skill candidates."""
@@ -176,14 +186,30 @@ class IdentityResolver:
         if nearest_id is not None and nearest_sim >= self.merge_threshold:
             return ("merge", nearest_id, False)
         if nearest_id is None or nearest_sim <= self.gray_lower:
-            return ("new", self._create_skill(candidate_name, candidate_desc, vector), False)
+            return self._new_or_blocked(
+                candidate_id=candidate_id,
+                candidate_name=candidate_name,
+                candidate_desc=candidate_desc,
+                vector=vector,
+                nearest_id=nearest_id,
+                nearest_sim=nearest_sim,
+                judge_triggered=False,
+            )
 
         # Gray band: call the LLM judge if one is configured. Without a judge
         # we fall back to the legacy single threshold so the layer stays usable.
         if self.judge_client is None:
             if nearest_sim >= self.legacy_merge_threshold:
                 return ("merge", nearest_id, False)
-            return ("new", self._create_skill(candidate_name, candidate_desc, vector), False)
+            return self._new_or_blocked(
+                candidate_id=candidate_id,
+                candidate_name=candidate_name,
+                candidate_desc=candidate_desc,
+                vector=vector,
+                nearest_id=nearest_id,
+                nearest_sim=nearest_sim,
+                judge_triggered=False,
+            )
 
         verdict = self._call_gray_band_judge(
             candidate_name=candidate_name,
@@ -202,7 +228,48 @@ class IdentityResolver:
                 verdict=verdict,
             )
             return ("pending", nearest_id, True)
-        return ("new", self._create_skill(candidate_name, candidate_desc, vector), True)
+        return self._new_or_blocked(
+            candidate_id=candidate_id,
+            candidate_name=candidate_name,
+            candidate_desc=candidate_desc,
+            vector=vector,
+            nearest_id=nearest_id,
+            nearest_sim=nearest_sim,
+            judge_triggered=True,
+        )
+
+    def _new_or_blocked(
+        self,
+        *,
+        candidate_id: str,
+        candidate_name: str,
+        candidate_desc: str,
+        vector: list[float],
+        nearest_id: str | None,
+        nearest_sim: float,
+        judge_triggered: bool,
+    ) -> tuple[str, str | None, bool]:
+        """Try to create a new skill, or demote to ``pending`` if the daily cap is hit.
+
+        When the leaky bucket is full the candidate is queued in
+        ``pending_audits`` as a ``candidate_review`` row whose payload
+        carries ``reason='leaky_bucket_block'`` so the audit surface can
+        present these alongside (and distinguish them from) regular
+        gray-band reviews. The candidate's ``resolved_skill_id`` stays
+        unset and ``resolution_state`` flips to ``pending_audit`` in
+        :meth:`_resolve_one`.
+        """
+        skill_id = self._create_skill(candidate_name, candidate_desc, vector)
+        if skill_id is not None:
+            return ("new", skill_id, judge_triggered)
+        self._enqueue_leaky_bucket_audit(
+            candidate_id=candidate_id,
+            candidate_name=candidate_name,
+            candidate_desc=candidate_desc,
+            nearest_id=nearest_id,
+            nearest_sim=nearest_sim,
+        )
+        return ("pending", None, judge_triggered)
 
     def _call_gray_band_judge(
         self,
@@ -279,7 +346,22 @@ class IdentityResolver:
             ),
         )
 
-    def _create_skill(self, name: str, description: str, vector: list[float]) -> str:
+    def _create_skill(self, name: str, description: str, vector: list[float]) -> str | None:
+        """Insert a new skill row, unless the daily leaky-bucket cap is full.
+
+        Returns the new skill id on success, or ``None`` when the cap
+        has been reached; in that case the caller enqueues a
+        ``leaky_bucket_block`` audit and demotes the candidate to
+        ``pending``.
+        """
+        if self.daily_new_skill_cap > 0:
+            row = self.sqlite.conn.execute(
+                "SELECT count(*) AS n FROM skill_nodes "
+                "WHERE date(created_at) = date('now')"
+            ).fetchone()
+            created_today = int(row["n"]) if row is not None else 0
+            if created_today >= self.daily_new_skill_cap:
+                return None
         now = iso_utc()
         skill_id = new_ulid()
         self.sqlite.conn.execute(
@@ -301,6 +383,45 @@ class IdentityResolver:
         )
         self.ann.add(skill_id, vector)
         return skill_id
+
+    def _enqueue_leaky_bucket_audit(
+        self,
+        *,
+        candidate_id: str,
+        candidate_name: str,
+        candidate_desc: str,
+        nearest_id: str | None,
+        nearest_sim: float,
+    ) -> None:
+        """Queue a ``candidate_review`` row tagged ``leaky_bucket_block``.
+
+        We reuse the existing ``candidate_review`` audit type rather
+        than introducing a new value because ``pending_audits.audit_type``
+        is CHECK-constrained in migration 0001 to a closed set
+        (``split``, ``merge``, ``candidate_review``). The blocked-by-cap
+        signal lives in the payload's ``reason`` field instead.
+        """
+        self.sqlite.conn.execute(
+            """
+            INSERT INTO pending_audits(id, audit_type, payload_json, created_at)
+            VALUES (?, 'candidate_review', ?, ?)
+            """,
+            (
+                new_ulid(),
+                json.dumps(
+                    {
+                        "candidate_id": candidate_id,
+                        "candidate_name": candidate_name,
+                        "candidate_description": candidate_desc,
+                        "nearest_skill_id": nearest_id,
+                        "cosine": nearest_sim,
+                        "reason": "leaky_bucket_block",
+                        "daily_new_skill_cap": self.daily_new_skill_cap,
+                    }
+                ),
+                iso_utc(),
+            ),
+        )
 
     def decision_log_payload(self, decisions: list[ResolveDecision]) -> str:
         """Return stable JSON for debug output."""

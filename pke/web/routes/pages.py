@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
 
+from pke.mastery.bands import band_from_mastery
 from pke.mastery.selector import ItemSelector
 from pke.web.deps import templates
 
@@ -56,7 +57,14 @@ SLIPPAGE_SCORE_SQL = (
 
 
 def _fetch_skills(app: Any, *, sort: str) -> list[dict[str, Any]]:
-    """Load active skills joined with mastery state, sorted by ``sort``."""
+    """Load active skills joined with mastery state, sorted by ``sort``.
+
+    Each returned dict carries an attached ``band`` glyph + label so
+    the template can render a coarse mastery indicator next to the
+    raw unaided-retrievability float. See
+    :func:`pke.mastery.bands.band_from_mastery` for the threshold
+    table.
+    """
     order_by = SKILL_SORT_COLUMNS.get(sort, SKILL_SORT_COLUMNS["slippage"])
     rows = app.sqlite.conn.execute(
         f"""
@@ -65,6 +73,7 @@ def _fetch_skills(app: Any, *, sort: str) -> list[dict[str, Any]]:
           s.canonical_name,
           s.user_status,
           COALESCE(m.unaided_retrievability, 0.0) AS unaided_mastery,
+          COALESCE(m.unaided_reps, 0)             AS unaided_reps,
           COALESCE(m.functional_stability, 0.0)   AS functional_mastery,
           m.unaided_last_review_at                AS last_reviewed_at,
           COALESCE(m.unaided_lapses, 0)           AS unaided_lapses,
@@ -76,7 +85,17 @@ def _fetch_skills(app: Any, *, sort: str) -> list[dict[str, Any]]:
         ORDER BY {order_by}
         """
     ).fetchall()
-    return [dict(row) for row in rows]
+    skills: list[dict[str, Any]] = []
+    for row in rows:
+        skill = dict(row)
+        band = band_from_mastery(
+            unaided=float(skill.get("unaided_mastery") or 0.0),
+            reps=int(skill.get("unaided_reps") or 0),
+        )
+        skill["band_glyph"] = band.glyph
+        skill["band_label"] = band.label
+        skills.append(skill)
+    return skills
 
 
 def router(store_getter: Any) -> APIRouter:
