@@ -11,14 +11,22 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from pke.quality.llm_log import daily_cost_by_provider
 from pke.quality.metrics import (
     METRIC_ARI_WEEK,
     METRIC_CENTROID_COUNT,
     METRIC_LLM_COST_30D,
     latest_metric,
+    metric_series,
 )
 
 _TRACKED_METRICS = (METRIC_CENTROID_COUNT, METRIC_ARI_WEEK, METRIC_LLM_COST_30D)
+
+# History windows per metric for the admin dashboard charts.
+# centroid_count is sampled daily, ari_week weekly, llm_cost_30d daily.
+CENTROID_HISTORY_POINTS = 30
+ARI_HISTORY_POINTS = 12
+COST_HISTORY_DAYS = 30
 
 
 def router(store_getter: Any) -> APIRouter:
@@ -41,5 +49,45 @@ def router(store_getter: Any) -> APIRouter:
                 "payload": snap.payload,
             }
         return result
+
+    @api.get("/drift/history")
+    async def drift_history() -> dict[str, Any]:
+        """Return time-series for each tracked metric.
+
+        ``centroid_count`` and ``ari_week`` are returned as ordered
+        lists of ``{value, band, recorded_at}`` entries (chronological,
+        oldest-first). ``llm_cost_30d`` is returned as a per-day
+        per-provider breakdown so the admin dashboard can stack
+        anthropic / openai / local bars.
+        """
+        app = store_getter()
+        centroid_series = metric_series(
+            app.sqlite,
+            metric_name=METRIC_CENTROID_COUNT,
+            limit=CENTROID_HISTORY_POINTS,
+        )
+        ari_series = metric_series(
+            app.sqlite, metric_name=METRIC_ARI_WEEK, limit=ARI_HISTORY_POINTS
+        )
+        cost_daily = daily_cost_by_provider(app.sqlite, days=COST_HISTORY_DAYS)
+        return {
+            "centroid_count": [
+                {
+                    "value": s.value,
+                    "band": s.band.value,
+                    "recorded_at": s.recorded_at,
+                }
+                for s in centroid_series
+            ],
+            "ari_week": [
+                {
+                    "value": s.value,
+                    "band": s.band.value,
+                    "recorded_at": s.recorded_at,
+                }
+                for s in ari_series
+            ],
+            "llm_cost_30d": cost_daily,
+        }
 
     return api
