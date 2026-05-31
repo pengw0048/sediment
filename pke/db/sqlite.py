@@ -24,10 +24,18 @@ class SQLiteStore:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """Return an open connection."""
+        """Return an open connection.
+
+        ``check_same_thread=False`` is required because some adapters
+        (the OpenAI / Anthropic HTTP proxies, the browser-extension
+        endpoint) ingest evidence from FastAPI request handlers running
+        on a uvicorn worker thread, not the thread that constructed the
+        :class:`App`. SQLite still serializes writes via WAL plus
+        Python's GIL; we don't run concurrent writers.
+        """
         if self._conn is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(self.path)
+            self._conn = sqlite3.connect(self.path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._apply_pragmas(self._conn)
         return self._conn

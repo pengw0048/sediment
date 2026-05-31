@@ -24,7 +24,17 @@ from pke.evidence.models import EvidenceEvent
 
 @dataclass(kw_only=True, slots=True)
 class AnthropicProxyAdapter(_AdapterBase):
-    """Passive HTTP proxy in front of api.anthropic.com."""
+    """Passive HTTP proxy in front of api.anthropic.com.
+
+    Driven via the ``pke proxy anthropic`` CLI command, which calls
+    :func:`pke.adapters.anthropic_proxy.create_proxy_app` to build a
+    FastAPI app and serves it via uvicorn. The FastAPI app forwards
+    every request to ``api.anthropic.com`` verbatim and streams the
+    SSE response back to the client chunk by chunk, capturing a
+    buffered copy for evidence in a background task. The registry
+    entry exists so admin surfaces can list the proxy as a known
+    source even when the standalone uvicorn process is not running.
+    """
 
     name: str = "anthropic_proxy"
     version: str = "0.1.0"
@@ -32,7 +42,14 @@ class AnthropicProxyAdapter(_AdapterBase):
 
 @dataclass(kw_only=True, slots=True)
 class OpenAIProxyAdapter(_AdapterBase):
-    """Passive HTTP proxy in front of api.openai.com and compatible servers."""
+    """Passive HTTP proxy in front of api.openai.com and compatible servers.
+
+    Driven via the ``pke proxy openai`` CLI command. See
+    :class:`AnthropicProxyAdapter` for the overall shape — the OpenAI
+    proxy adds capture for both ``/v1/chat/completions`` (chunked
+    ``data: {…}`` events terminated by ``[DONE]``) and ``/v1/responses``
+    (``response.output_text.delta`` events).
+    """
 
     name: str = "openai_proxy"
     version: str = "0.1.0"
