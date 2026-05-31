@@ -364,15 +364,11 @@ def test_reassemble_openai_sse_responses_taxonomy() -> None:
     assert openai_proxy.reassemble_openai_sse(body, path="v1/responses") == "abcd"
 
 
-def test_reassemble_openai_sse_captures_tool_call_in_chat_completions() -> None:
-    """Function-call deltas reassemble into a `[tool_call name(args)]` tail.
+def test_reassemble_openai_sse_natural_language_text_only() -> None:
+    """The text wrapper returns only the assistant's natural-language deltas.
 
-    The chat-completions taxonomy splits the call across at least two
-    chunks: the first carries the function ``name`` (and usually an
-    empty ``arguments``), and later chunks accumulate ``arguments``
-    string fragments. The reassembler must merge them in order under
-    the same ``index`` and emit one compact tool-call line that
-    evidence capture can record.
+    Function-call deltas travel via the structured wrapper; the
+    text-only reassembler ignores them.
     """
     body = (
         b'data: {"choices": [{"delta": {"content": "I will look this up. "}}]}\n\n'
@@ -383,16 +379,15 @@ def test_reassemble_openai_sse_captures_tool_call_in_chat_completions() -> None:
         b"data: [DONE]\n\n"
     )
     out = openai_proxy.reassemble_openai_sse(body, path="v1/chat/completions")
-    assert "I will look this up." in out
-    assert '[tool_call get_weather({"city":"Tokyo"})]' in out
+    assert out == "I will look this up. "
+    assert "[tool_call" not in out
 
 
-def test_reassemble_openai_sse_captures_tool_call_in_responses_taxonomy() -> None:
-    """The responses taxonomy emits item-added + arguments-delta events.
+def test_reassemble_openai_sse_responses_taxonomy_natural_language_only() -> None:
+    """The responses taxonomy reassembles ``output_text.delta`` into the text body.
 
-    ``response.output_item.added`` carries the function ``name`` once
-    and ``response.function_call_arguments.delta`` accumulates the
-    arguments fragments under the same ``output_index``.
+    ``response.output_item.added`` + ``response.function_call_arguments.delta``
+    deltas feed the structured wrapper but never the text body.
     """
     body = (
         b'data: {"type": "response.output_text.delta", "delta": "thinking..."}\n\n'
@@ -405,16 +400,15 @@ def test_reassemble_openai_sse_captures_tool_call_in_responses_taxonomy() -> Non
         b'data: {"type": "response.completed"}\n\n'
     )
     out = openai_proxy.reassemble_openai_sse(body, path="v1/responses")
-    assert "thinking..." in out
-    assert '[tool_call get_weather({"city":"Tokyo"})]' in out
+    assert out == "thinking..."
+    assert "[tool_call" not in out
 
 
-def test_reassemble_openai_sse_tool_call_without_text_still_captures() -> None:
-    """A session with only a tool call (no natural-language deltas) still surfaces it.
+def test_reassemble_openai_sse_tool_call_only_returns_empty_text() -> None:
+    """A session with only a tool call (no natural-language deltas) returns empty text.
 
-    This is the case the old reassembler dropped on the floor: the
-    captured evidence used to be the empty string. Now the
-    ``[tool_call …]`` line is emitted on its own.
+    The tool call lives in the structured wrapper; the text-only path
+    is honest about there being no assistant prose.
     """
     body = (
         b'data: {"choices": [{"delta": {"tool_calls": ['
@@ -422,15 +416,11 @@ def test_reassemble_openai_sse_tool_call_without_text_still_captures() -> None:
         b"data: [DONE]\n\n"
     )
     out = openai_proxy.reassemble_openai_sse(body, path="v1/chat/completions")
-    assert out == '[tool_call lookup({"id": 42})]'
+    assert out == ""
 
 
 def test_reassemble_with_tool_calls_returns_structured_records() -> None:
-    """The structured helper returns both the text-with-tail and a populated record list.
-
-    The text suffix stays around for human readers, but downstream
-    consumers should prefer the ``ToolCallRecord`` list.
-    """
+    """The structured helper returns the natural-language text and a populated record list."""
     body = (
         b'data: {"choices": [{"delta": {"content": "I will look this up. "}}]}\n\n'
         b'data: {"choices": [{"delta": {"tool_calls": ['
@@ -442,10 +432,8 @@ def test_reassemble_with_tool_calls_returns_structured_records() -> None:
     text, tool_calls = openai_proxy.reassemble_openai_sse_with_tool_calls(
         body, path="v1/chat/completions"
     )
-    # Text suffix preserved for human-readable evidence views.
-    assert '[tool_call get_weather({"city":"Tokyo"})]' in text
-    assert "I will look this up." in text
-    # Structured records carry the same info in parsed form.
+    assert text == "I will look this up. "
+    assert "[tool_call" not in text
     assert len(tool_calls) == 1
     assert tool_calls[0].name == "get_weather"
     assert tool_calls[0].arguments == '{"city":"Tokyo"}'
@@ -456,8 +444,9 @@ def test_openai_sse_tool_call_stream_populates_event_tool_calls_field(app: objec
     """End-to-end: a tool_call SSE stream lands as a structured field on the event.
 
     The captured evidence row's ``metadata_json`` carries a non-empty
-    ``tool_calls`` list, and the assistant turn's content still
-    includes the ``[tool_call …]`` human-readable suffix.
+    ``tool_calls`` list. The assistant content is only the
+    natural-language deltas; tool-call metadata lives exclusively in
+    the structured field.
     """
     chunks = [
         b'data: {"choices": [{"delta": {"content": "Checking. "}}]}\n\n',
@@ -519,8 +508,8 @@ def test_openai_sse_tool_call_stream_populates_event_tool_calls_field(app: objec
 
     assert len(rows) == 1
     row = rows[0]
-    # Text suffix lives on the assistant turn (flattened into ``content``).
-    assert '[tool_call get_weather({"city":"Tokyo"})]' in row["content"]
+    assert "Checking." in row["content"]
+    assert "[tool_call" not in row["content"]
     # Structured records survive the round-trip through metadata_json.
     metadata = json.loads(row["metadata_json"])
     assert metadata.get("tool_calls"), "tool_calls must be a populated list"

@@ -57,10 +57,9 @@ def event_from_openai_request_response(
     """Build evidence from an OpenAI chat/responses request and response text.
 
     ``tool_calls``, when provided, becomes the structured record of any
-    function/tool calls the assistant emitted. ``response_text`` may
-    additionally carry a human-readable ``[tool_call name(args)]`` tail
-    so existing string-only consumers (CLI dumps, debug logs) keep
-    working, but the structured field is the primary source.
+    function/tool calls the assistant emitted. ``response_text`` carries
+    only the assistant's natural-language output; consumers that need
+    tool call information read the structured field.
     """
     messages = request_body.get("messages", [])
     user_content = ""
@@ -103,9 +102,8 @@ def reassemble_openai_sse_with_tool_calls(
     """Concatenate SSE text fragments and reassemble any tool-call deltas.
 
     Returns ``(body_text, tool_calls)``. ``body_text`` is the
-    user-visible text with a ``[tool_call name(arguments)]`` tail
-    appended for human-readable evidence views; ``tool_calls`` is the
-    structured list of records that downstream consumers should prefer.
+    user-visible assistant text only; tool-call metadata travels in
+    ``tool_calls`` as the structured source of truth.
 
     ``path`` selects the event taxonomy:
 
@@ -220,10 +218,6 @@ def reassemble_openai_sse_with_tool_calls(
                     arguments=bucket.get("arguments") or "",
                 )
             )
-        tail = "".join(
-            f"\n[tool_call {tc.name}({tc.arguments})]" for tc in tool_call_records
-        )
-        body = body + tail if body else tail.lstrip("\n")
     return body, tool_call_records
 
 
