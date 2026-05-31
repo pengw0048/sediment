@@ -362,3 +362,64 @@ def test_reassemble_openai_sse_responses_taxonomy() -> None:
         b'data: {"type": "response.completed"}\n\n'
     )
     assert openai_proxy.reassemble_openai_sse(body, path="v1/responses") == "abcd"
+
+
+def test_reassemble_openai_sse_captures_tool_call_in_chat_completions() -> None:
+    """Function-call deltas reassemble into a `[tool_call name(args)]` tail.
+
+    The chat-completions taxonomy splits the call across at least two
+    chunks: the first carries the function ``name`` (and usually an
+    empty ``arguments``), and later chunks accumulate ``arguments``
+    string fragments. The reassembler must merge them in order under
+    the same ``index`` and emit one compact tool-call line that
+    evidence capture can record.
+    """
+    body = (
+        b'data: {"choices": [{"delta": {"content": "I will look this up. "}}]}\n\n'
+        b'data: {"choices": [{"delta": {"tool_calls": ['
+        b'{"index": 0, "function": {"name": "get_weather", "arguments": "{\\"city\\":"}}]}}]}\n\n'
+        b'data: {"choices": [{"delta": {"tool_calls": ['
+        b'{"index": 0, "function": {"arguments": "\\"Tokyo\\"}"}}]}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    out = openai_proxy.reassemble_openai_sse(body, path="v1/chat/completions")
+    assert "I will look this up." in out
+    assert '[tool_call get_weather({"city":"Tokyo"})]' in out
+
+
+def test_reassemble_openai_sse_captures_tool_call_in_responses_taxonomy() -> None:
+    """The responses taxonomy emits item-added + arguments-delta events.
+
+    ``response.output_item.added`` carries the function ``name`` once
+    and ``response.function_call_arguments.delta`` accumulates the
+    arguments fragments under the same ``output_index``.
+    """
+    body = (
+        b'data: {"type": "response.output_text.delta", "delta": "thinking..."}\n\n'
+        b'data: {"type": "response.output_item.added", "output_index": 0, '
+        b'"item": {"type": "function_call", "name": "get_weather"}}\n\n'
+        b'data: {"type": "response.function_call_arguments.delta", '
+        b'"output_index": 0, "delta": "{\\"city\\":"}\n\n'
+        b'data: {"type": "response.function_call_arguments.delta", '
+        b'"output_index": 0, "delta": "\\"Tokyo\\"}"}\n\n'
+        b'data: {"type": "response.completed"}\n\n'
+    )
+    out = openai_proxy.reassemble_openai_sse(body, path="v1/responses")
+    assert "thinking..." in out
+    assert '[tool_call get_weather({"city":"Tokyo"})]' in out
+
+
+def test_reassemble_openai_sse_tool_call_without_text_still_captures() -> None:
+    """A session with only a tool call (no natural-language deltas) still surfaces it.
+
+    This is the case the old reassembler dropped on the floor: the
+    captured evidence used to be the empty string. Now the
+    ``[tool_call …]`` line is emitted on its own.
+    """
+    body = (
+        b'data: {"choices": [{"delta": {"tool_calls": ['
+        b'{"index": 0, "function": {"name": "lookup", "arguments": "{\\"id\\": 42}"}}]}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    out = openai_proxy.reassemble_openai_sse(body, path="v1/chat/completions")
+    assert out == '[tool_call lookup({"id": 42})]'

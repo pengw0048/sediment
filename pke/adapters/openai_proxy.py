@@ -89,15 +89,32 @@ def reassemble_openai_sse(raw_body: bytes, *, path: str) -> str:
 
     ``path`` selects the event taxonomy:
 
-    * ``v1/chat/completions`` reads ``choices[0].delta.content``.
-    * ``v1/responses`` reads ``delta`` from ``response.output_text.delta``
-      events.
+    * ``v1/chat/completions`` reads ``choices[0].delta.content`` for
+      natural-language deltas and ``choices[0].delta.tool_calls[i]``
+      for function-call deltas (``name`` arrives once, ``arguments``
+      accumulates across chunks).
+    * ``v1/responses`` reads ``delta`` from
+      ``response.output_text.delta`` events for text, and pairs
+      ``response.output_item.added`` (carrying a function ``name``)
+      with ``response.function_call_arguments.delta`` (carrying the
+      JSON-string arguments fragment) for tool calls.
 
-    Lines that don't begin with ``data:``, the ``[DONE]`` sentinel, and
-    JSON that fails to parse are skipped — the goal is best-effort
+    Tool-call deltas are reassembled into a compact
+    ``[tool_call name(arguments)]`` line appended after the body
+    text so evidence captures sessions where the model emitted only
+    a function call (no plain text), which the old reassembler
+    silently dropped.
+
+    Lines that don't begin with ``data:``, the ``[DONE]`` sentinel,
+    and JSON that fails to parse are skipped — the goal is best-effort
     reassembly for evidence, not strict validation.
     """
     text_parts: list[str] = []
+    # tool_parts is keyed by tool-call slot (chat-completions uses
+    # the integer ``index`` on each delta; responses uses the
+    # ``output_index`` or ``item_id`` on the streaming events). Each
+    # slot accumulates ``name`` once and ``arguments`` as a string.
+    tool_parts: dict[object, dict[str, str]] = {}
     is_responses = path.endswith("v1/responses")
     for line in raw_body.decode("utf-8", errors="ignore").splitlines():
         if not line.startswith("data:"):
@@ -110,10 +127,36 @@ def reassemble_openai_sse(raw_body: bytes, *, path: str) -> str:
         except json.JSONDecodeError:
             continue
         if is_responses:
-            if event.get("type") == "response.output_text.delta":
+            event_type = event.get("type")
+            if event_type == "response.output_text.delta":
                 delta = event.get("delta")
                 if isinstance(delta, str):
                     text_parts.append(delta)
+            elif event_type == "response.output_item.added":
+                item = event.get("item") or {}
+                if isinstance(item, dict) and item.get("type") == "function_call":
+                    # Prefer ``output_index`` (stable across all
+                    # later argument deltas for this item) and fall
+                    # back to the item id when the upstream omits it.
+                    slot = event.get("output_index")
+                    if slot is None:
+                        slot = item.get("id")
+                    bucket = tool_parts.setdefault(
+                        slot, {"name": "", "arguments": ""}
+                    )
+                    name = item.get("name")
+                    if isinstance(name, str):
+                        bucket["name"] = name
+            elif event_type == "response.function_call_arguments.delta":
+                slot = event.get("output_index")
+                if slot is None:
+                    slot = event.get("item_id")
+                delta = event.get("delta")
+                if isinstance(delta, str):
+                    bucket = tool_parts.setdefault(
+                        slot, {"name": "", "arguments": ""}
+                    )
+                    bucket["arguments"] += delta
             continue
         choices = event.get("choices") or []
         if not isinstance(choices, list):
@@ -127,7 +170,39 @@ def reassemble_openai_sse(raw_body: bytes, *, path: str) -> str:
             content = delta.get("content")
             if isinstance(content, str):
                 text_parts.append(content)
-    return "".join(text_parts)
+            tool_calls = delta.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    # Each chunk carries an ``index`` so fragments
+                    # land in the right slot even when the model
+                    # emits multiple parallel tool calls. Default to
+                    # 0 if the upstream omits it (legacy behavior).
+                    idx = tc.get("index", 0)
+                    bucket = tool_parts.setdefault(
+                        idx, {"name": "", "arguments": ""}
+                    )
+                    func = tc.get("function")
+                    if isinstance(func, dict):
+                        name = func.get("name")
+                        if isinstance(name, str) and name:
+                            bucket["name"] = name
+                        args = func.get("arguments")
+                        if isinstance(args, str):
+                            bucket["arguments"] += args
+    body = "".join(text_parts)
+    if tool_parts:
+        # Sort slots deterministically; chat-completions uses ints,
+        # responses uses ints or strings, so coerce both to str for
+        # a stable order.
+        tail = "".join(
+            f"\n[tool_call {tool_parts[slot].get('name') or '?'}"
+            f"({tool_parts[slot].get('arguments') or ''})]"
+            for slot in sorted(tool_parts, key=lambda k: str(k))
+        )
+        body = body + tail if body else tail.lstrip("\n")
+    return body
 
 
 def create_proxy_app(
