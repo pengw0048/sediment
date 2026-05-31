@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from pke.mastery.selector import ItemSelector
 from pke.review.grader import Grader, GradeResult
 from pke.review.item_gen import ItemGenerator
 from pke.review.session import add_item, answer_item, create_session
+
+# Hard cap on session length. The selector sorts every active skill, so a
+# huge limit is computationally fine, but a session of >50 items is past
+# what a human can complete in one sitting — refuse rather than let the
+# UI invite a doomed run.
+MAX_REVIEW_LIMIT = 50
 
 
 def router(store_getter: Any) -> APIRouter:
@@ -17,11 +23,35 @@ def router(store_getter: Any) -> APIRouter:
     api = APIRouter(prefix="/api/v1/review")
 
     @api.post("/start")
-    async def start(payload: dict[str, Any]) -> dict[str, Any]:
+    async def start(
+        request: Request,
+        payload: dict[str, Any] | None = None,
+        limit: int = Query(5, ge=1, le=MAX_REVIEW_LIMIT),
+    ) -> dict[str, Any]:
+        # ?limit=N is the canonical contract (validated by FastAPI to
+        # 1..MAX_REVIEW_LIMIT). The JSON body keeps working for callers
+        # that still POST {"limit": N}; the query string wins when both
+        # are present so a URL like /api/v1/review/start?limit=10 is
+        # always the source of truth.
+        body = payload or {}
+        query_limit_supplied = "limit" in request.query_params
+        if not query_limit_supplied and "limit" in body:
+            raw = body["limit"]
+            try:
+                body_limit = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=422, detail="limit must be an integer"
+                ) from exc
+            if not 1 <= body_limit <= MAX_REVIEW_LIMIT:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"limit must be between 1 and {MAX_REVIEW_LIMIT}",
+                )
+            limit = body_limit
         app = store_getter()
-        limit = int(payload.get("limit", 5))
         session = create_session(
-            app.sqlite, client=str(payload.get("client", "web")), selected_count=limit
+            app.sqlite, client=str(body.get("client", "web")), selected_count=limit
         )
         selector = ItemSelector(sqlite=app.sqlite)
         candidates = selector.select(limit=limit)

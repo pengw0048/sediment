@@ -1,7 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="review-card" x-data="{rating: null, revealed: false}">
-  <p class="kicker">Review · Item 1 of 5</p>
+  <form class="review-config" action="/review" method="get">
+    <label for="limit">Session length</label>
+    <select id="limit" name="limit" onchange="this.form.submit()">
+      {% for option in [5, 10, 20, 50] %}
+      <option value="{{ option }}" {% if option == (limit or 5) %}selected{% endif %}>{{ option }} items</option>
+      {% endfor %}
+    </select>
+    <noscript><button type="submit">Apply</button></noscript>
+  </form>
+  <p class="kicker">Review · Item 1 of {{ limit or 5 }}</p>
   <h1>How confident are you that you'd get it right on your own?</h1>
   <div class="rating-row" role="radiogroup" aria-label="Predict before reveal">
     <button @click="rating=1; revealed=true">1<br>No idea</button>

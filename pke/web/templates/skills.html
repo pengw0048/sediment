@@ -1,19 +1,44 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="split">
-  <aside class="panel">
+<section class="panel skills-page">
+  <header class="panel-header">
     <h1>Skills ({{ skills|length }})</h1>
-    <ul>
-      {% for skill in skills %}
-      <li><a href="/skills/{{ skill.id }}">{{ skill.canonical_name }}</a> <span aria-label="3 of 5, practicing">●●●○○</span></li>
-      {% else %}
-      <li>No skills yet.</li>
-      {% endfor %}
-    </ul>
-  </aside>
-  <section class="panel graph-panel">
-    <h2>Skill graph</h2>
-    <div class="graph" aria-label="secondary skill graph view">●────●──●</div>
-  </section>
+    <p class="muted">
+      Sorted by most-slipping first. Higher slippage means the skill is
+      drifting out of unaided reach — through forgetting, lapses, or
+      recent AI-assist pressure.
+    </p>
+  </header>
+
+  <form
+    class="skills-controls"
+    hx-get="/partials/skills-table"
+    hx-target="#skills-table-body"
+    hx-swap="outerHTML"
+    hx-trigger="change"
+  >
+    <label for="sort">Sort by</label>
+    <select id="sort" name="sort">
+      <option value="slippage" {% if sort == 'slippage' %}selected{% endif %}>Most slipping</option>
+      <option value="name" {% if sort == 'name' %}selected{% endif %}>Name (A→Z)</option>
+      <option value="unaided" {% if sort == 'unaided' %}selected{% endif %}>Unaided mastery (low→high)</option>
+      <option value="functional" {% if sort == 'functional' %}selected{% endif %}>Functional mastery (low→high)</option>
+      <option value="last_reviewed" {% if sort == 'last_reviewed' %}selected{% endif %}>Last reviewed (stale→fresh)</option>
+    </select>
+  </form>
+
+  <table class="skills-table" aria-label="skills">
+    <thead>
+      <tr>
+        <th scope="col">Skill</th>
+        <th scope="col">Unaided</th>
+        <th scope="col">Functional</th>
+        <th scope="col">Last reviewed</th>
+        <th scope="col">Slippage</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    {% include "partials/skills_table.html" %}
+  </table>
 </section>
 {% endblock %}

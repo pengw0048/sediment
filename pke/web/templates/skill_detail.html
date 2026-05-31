@@ -1,11 +1,33 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel">
+<section class="panel skill-detail">
   <a href="/skills">← back</a>
   {% if skill %}
   <h1>{{ skill.canonical_name }}</h1>
-  <p>Unaided mastery: <span aria-label="3 of 5, practicing">●●●○○</span></p>
-  <p>Status: {{ skill.user_status }}</p>
+  <dl class="skill-stats">
+    <dt>Unaided mastery</dt>
+    <dd>{{ "%.2f"|format(skill.unaided_mastery or 0.0) }}</dd>
+    <dt>Functional mastery</dt>
+    <dd>{{ "%.2f"|format(skill.functional_mastery or 0.0) }}</dd>
+    <dt>Last reviewed</dt>
+    <dd>{% if skill.last_reviewed_at %}{{ skill.last_reviewed_at }}{% else %}never{% endif %}</dd>
+    <dt>Unaided reps</dt>
+    <dd>{{ skill.unaided_reps or 0 }}</dd>
+    <dt>Lapses</dt>
+    <dd>{{ skill.unaided_lapses or 0 }}</dd>
+    <dt>Recent AI-assist (7d)</dt>
+    <dd>{{ skill.outsource_count_7d or 0 }}</dd>
+    <dt>Status</dt>
+    <dd>{{ skill.user_status }}</dd>
+  </dl>
+  <button
+    type="button"
+    class="primary review-now"
+    hx-post="/api/v1/review/start?limit=1"
+    hx-vals='{"skill_id": "{{ skill.id }}", "client": "web"}'
+    hx-swap="none"
+    hx-on::after-request="if(event.detail.successful) window.location.href = '/review?limit=1'"
+  >Review now</button>
   {% else %}
   <h1>Skill not found</h1>
   {% endif %}

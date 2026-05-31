@@ -1,0 +1,28 @@
+{# Table body for /skills. Rendered standalone by /partials/skills-table for htmx swaps. #}
+<tbody id="skills-table-body" data-sort="{{ sort }}">
+  {% for skill in skills %}
+  <tr data-skill-id="{{ skill.id }}">
+    <th scope="row">
+      <a href="/skills/{{ skill.id }}">{{ skill.canonical_name }}</a>
+    </th>
+    <td data-col="unaided">{{ "%.2f"|format(skill.unaided_mastery or 0.0) }}</td>
+    <td data-col="functional">{{ "%.2f"|format(skill.functional_mastery or 0.0) }}</td>
+    <td data-col="last-reviewed">
+      {% if skill.last_reviewed_at %}{{ skill.last_reviewed_at }}{% else %}never{% endif %}
+    </td>
+    <td data-col="slippage">{{ "%.2f"|format(skill.slippage_score or 0.0) }}</td>
+    <td>
+      <button
+        type="button"
+        class="review-now"
+        hx-post="/api/v1/review/start?limit=1"
+        hx-vals='{"skill_id": "{{ skill.id }}", "client": "web"}'
+        hx-swap="none"
+        hx-on::after-request="if(event.detail.successful) window.location.href = '/review'"
+      >Review now</button>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">No active skills yet.</td></tr>
+  {% endfor %}
+</tbody>
