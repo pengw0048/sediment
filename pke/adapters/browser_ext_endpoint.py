@@ -46,22 +46,19 @@ def _coerce_source(payload: dict[str, Any], url: str) -> str:
     ``"browser_ext"`` so older content scripts keep working.
     """
     requested = payload.get("source")
-    if (
-        isinstance(requested, str)
-        and requested.startswith("browser_ext")
-        and requested in VALID_SOURCES
-    ):
-        return requested
-    # Map URL-derived guesses for forward compatibility — used when an
-    # older content script omits ``source`` or sends a value we haven't
-    # registered yet. Keep these in lockstep with the manifest's
-    # ``host_permissions``.
-    if "chatgpt" in url or "chat.openai.com" in url:
-        return "browser_ext_chatgpt" if "browser_ext_chatgpt" in VALID_SOURCES else "browser_ext"
-    if "claude.ai" in url:
-        return "browser_ext_claude_ai" if "browser_ext_claude_ai" in VALID_SOURCES else "browser_ext"
-    if "gemini.google.com" in url:
-        return "browser_ext_gemini" if "browser_ext_gemini" in VALID_SOURCES else "browser_ext"
+    if isinstance(requested, str) and requested.startswith("browser_ext"):
+        if requested in VALID_SOURCES:
+            return requested
+        # Map URL-derived guesses for forward compatibility: an older
+        # content script may send a ``browser_ext*`` source we haven't
+        # registered yet. Keep these in lockstep with the manifest's
+        # ``host_permissions``.
+        if "chatgpt" in url or "chat.openai.com" in url:
+            return "browser_ext_chatgpt" if "browser_ext_chatgpt" in VALID_SOURCES else "browser_ext"
+        if "claude.ai" in url:
+            return "browser_ext_claude_ai" if "browser_ext_claude_ai" in VALID_SOURCES else "browser_ext"
+        if "gemini.google.com" in url:
+            return "browser_ext_gemini" if "browser_ext_gemini" in VALID_SOURCES else "browser_ext"
     return "browser_ext"
 
 
