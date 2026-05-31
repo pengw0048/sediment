@@ -57,6 +57,10 @@ denstream_lambda     = 0.0006
 denstream_eps        = 0.18
 denstream_beta       = 0.75
 denstream_mu         = 2.0
+# Leaky bucket: max new skill nodes auto-created per UTC day. Candidates
+# that would push us past the cap are queued in pending_audits with
+# reason='leaky_bucket_block' instead. Set to 0 to disable.
+daily_skill_cap      = 50
 
 [mastery]
 review_items_per_day = 5
@@ -83,6 +87,11 @@ file_watcher     = "off"
 [adapters.claude_code_tailer]
 enabled = true
 roots   = ["~/.claude/projects"]
+# Cold-start rate limit: when a transcript file's mtime is older than
+# this many hours and the offset store has no record for it, skip its
+# backlog (seek to EOF and persist) instead of replaying every line.
+# Set to 0 to disable and always replay history.
+skip_backlog_older_than_hours = 24
 
 [adapters.cursor]
 enabled = true
@@ -126,6 +135,13 @@ class Settings:
     embedding_dim: int = 768
     intervention_default: str = "quiet"
     intervention_per_source: dict[str, str] = field(default_factory=dict)
+    # Cold-start rate limit for TailWatcher: files with mtime older than
+    # this many hours are seek-to-EOF'd on first sight instead of being
+    # fully replayed. ``None`` or ``0`` disables and forces full replay.
+    tail_watcher_skip_backlog_hours: float | None = 24.0
+    # Leaky-bucket cap on identity-resolver new-skill creation per UTC
+    # day. ``0`` disables the cap.
+    identity_daily_skill_cap: int = 50
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -164,6 +180,22 @@ class Settings:
         env_data = os.environ.get("PKE_CORE__DATA_DIR")
         if env_data:
             data_dir = Path(env_data).expanduser()
+        adapters_cfg = raw.get("adapters", {}) if isinstance(raw, dict) else {}
+        tailer_cfg = (
+            adapters_cfg.get("claude_code_tailer", {})
+            if isinstance(adapters_cfg, dict)
+            else {}
+        )
+        skip_hours_raw = tailer_cfg.get("skip_backlog_older_than_hours", 24.0)
+        try:
+            skip_hours: float | None = float(skip_hours_raw)
+        except (TypeError, ValueError):
+            skip_hours = 24.0
+        identity_cfg = raw.get("identity", {}) if isinstance(raw, dict) else {}
+        try:
+            identity_daily_skill_cap = int(identity_cfg.get("daily_skill_cap", 50))
+        except (TypeError, ValueError):
+            identity_daily_skill_cap = 50
         return cls(
             data_dir=data_dir,
             config_path=config_path,
@@ -178,6 +210,8 @@ class Settings:
             embedding_dim=int(embedding.get("dim", 768)),
             intervention_default=str(defaults.get("strength", "quiet")),
             intervention_per_source={str(k): str(v) for k, v in per_source.items()},
+            tail_watcher_skip_backlog_hours=skip_hours,
+            identity_daily_skill_cap=identity_daily_skill_cap,
             raw=raw,
         )
 

@@ -15,6 +15,7 @@ and stops there, leaving a half-written line for the next event.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,11 +54,21 @@ class TailWatcher:
         handler: LineHandler,
         offset_store: FileOffsetStore | None = None,
         glob: str = "*.jsonl",
+        skip_backlog_older_than_hours: float | None = 24.0,
     ) -> None:
         self._directory = directory
         self._handler = handler
         self._offset_store = offset_store or FileOffsetStore()
         self._glob = glob
+        # Cold-start protection: when a file is first encountered (no
+        # entry in the offset store) and its mtime is older than this
+        # many hours, seek to EOF and persist that offset instead of
+        # replaying every line through the handler. A developer with
+        # months of historical transcripts on disk should not pay an
+        # O(all history) wall on first boot. Live appends still trigger
+        # watchdog events and stream through normally. Set to ``None``
+        # or ``0`` to disable and always replay from offset 0.
+        self._skip_backlog_older_than_hours = skip_backlog_older_than_hours
         self._lock = threading.Lock()
         self._observer: Any | None = None
 
@@ -109,6 +120,20 @@ class TailWatcher:
                 return
             start_at = self._offset_store.resume_offset(path)
             file_size = path.stat().st_size
+            # Cold-start: if the offset store has no record for this
+            # file and its mtime is older than the configured window,
+            # jump to EOF and persist that offset rather than replaying
+            # months of historical transcripts through the handler.
+            if (
+                start_at == 0
+                and self._skip_backlog_older_than_hours
+                and self._skip_backlog_older_than_hours > 0
+                and self._offset_store.get(path) is None
+            ):
+                cutoff = time.time() - self._skip_backlog_older_than_hours * 3600.0
+                if path.stat().st_mtime < cutoff:
+                    self._offset_store.remember_after_read(path, offset=file_size)
+                    return
             if start_at >= file_size:
                 return
             with path.open("rb") as fh:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -146,3 +147,73 @@ def test_file_offset_dataclass_is_frozen() -> None:
     snap = FileOffset(offset=1, inode=2)
     with pytest.raises(AttributeError):
         snap.offset = 5  # type: ignore[misc]
+
+
+def test_tail_watcher_skips_backlog_for_old_files(tmp_path: Path) -> None:
+    """A pre-existing file older than the cold-start window is seek-to-EOF'd.
+
+    A developer with months of historical transcripts on disk should
+    not pay an O(all history) wall on first boot. The watcher records
+    the file's current size as the resume offset and never invokes the
+    handler for any of the existing lines.
+    """
+    captured: list[TailEvent] = []
+    store = FileOffsetStore(path=tmp_path / "offsets.json")
+    watcher = TailWatcher(
+        tmp_path,
+        handler=captured.append,
+        offset_store=store,
+        skip_backlog_older_than_hours=24.0,
+    )
+    target = tmp_path / "old.jsonl"
+    payload = "old1\nold2\nold3\n"
+    target.write_text(payload)
+    # Backdate mtime to 48 hours ago so it falls outside the 24h window.
+    old_mtime = time.time() - 48 * 3600.0
+    os.utime(target, (old_mtime, old_mtime))
+
+    watcher._drain(target)
+
+    assert captured == []
+    # Offset was persisted at EOF so subsequent live appends pick up
+    # from the new tail.
+    assert store.resume_offset(target) == len(payload.encode("utf-8"))
+
+
+def test_tail_watcher_replays_recent_files_even_without_offset(tmp_path: Path) -> None:
+    """A pre-existing file inside the cold-start window still replays."""
+    captured: list[TailEvent] = []
+    store = FileOffsetStore(path=tmp_path / "offsets.json")
+    watcher = TailWatcher(
+        tmp_path,
+        handler=captured.append,
+        offset_store=store,
+        skip_backlog_older_than_hours=24.0,
+    )
+    target = tmp_path / "fresh.jsonl"
+    target.write_text("fresh1\nfresh2\n")
+    # Mtime defaults to "now" so this is well inside the window.
+
+    watcher._drain(target)
+
+    assert [e.raw_line for e in captured] == ["fresh1", "fresh2"]
+
+
+def test_tail_watcher_disable_skip_replays_old_files(tmp_path: Path) -> None:
+    """skip_backlog_older_than_hours=0 disables the cold-start guard."""
+    captured: list[TailEvent] = []
+    store = FileOffsetStore(path=tmp_path / "offsets.json")
+    watcher = TailWatcher(
+        tmp_path,
+        handler=captured.append,
+        offset_store=store,
+        skip_backlog_older_than_hours=0,
+    )
+    target = tmp_path / "old.jsonl"
+    target.write_text("ancient1\nancient2\n")
+    old_mtime = time.time() - 365 * 24 * 3600.0
+    os.utime(target, (old_mtime, old_mtime))
+
+    watcher._drain(target)
+
+    assert [e.raw_line for e in captured] == ["ancient1", "ancient2"]
