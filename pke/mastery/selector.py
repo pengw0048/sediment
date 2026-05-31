@@ -50,6 +50,36 @@ class ItemSelector:
     # Cap on how heavily a single skill's outsource burst can boost its score.
     outsource_cap: int = 10
 
+    def select_one(self, skill_id: str) -> CandidateScore | None:
+        """Return a manual-review candidate for a single skill.
+
+        Used by the per-skill "Review now" button on the Skills page: the
+        caller already knows exactly which skill to review, so the
+        weighted-sum ranking is irrelevant. The selector still owns the
+        liveness check — only skills with both an active ``skill_nodes``
+        row and a ``skill_mastery_state`` row are eligible — which keeps
+        callers from inventing review sessions against archived or
+        never-mastered skills.
+
+        Returns ``None`` when the skill does not exist or is not active.
+        """
+        row = self.sqlite.conn.execute(
+            """
+            SELECT s.id
+            FROM skill_nodes s
+            JOIN skill_mastery_state m ON m.skill_id = s.id
+            WHERE s.id = ? AND s.user_status = 'active'
+            """,
+            (skill_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return CandidateScore(
+            skill_id=str(row["id"]),
+            score=0.0,
+            reason="manual review-now",
+        )
+
     def select(self, *, limit: int = 5, user_id: str | None = None) -> list[CandidateScore]:
         """Return top candidates for today's review."""
         del user_id  # user_id-scoped queries land in a multi-user iteration

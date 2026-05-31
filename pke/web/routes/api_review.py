@@ -27,6 +27,7 @@ def router(store_getter: Any) -> APIRouter:
         request: Request,
         payload: dict[str, Any] | None = None,
         limit: int = Query(5, ge=1, le=MAX_REVIEW_LIMIT),
+        skill_id: str | None = Query(None),
     ) -> dict[str, Any]:
         # ?limit=N is the canonical contract (validated by FastAPI to
         # 1..MAX_REVIEW_LIMIT). The JSON body keeps working for callers
@@ -49,12 +50,37 @@ def router(store_getter: Any) -> APIRouter:
                     detail=f"limit must be between 1 and {MAX_REVIEW_LIMIT}",
                 )
             limit = body_limit
+        # ``skill_id`` arrives either as a query param or in the htmx
+        # ``hx-vals`` body (top-level JSON field). Query string wins for
+        # consistency with ``limit``. An empty string from the body is
+        # treated as "not supplied" so a stale form post does not crash.
+        if skill_id is None:
+            body_skill = body.get("skill_id")
+            if isinstance(body_skill, str) and body_skill.strip():
+                skill_id = body_skill.strip()
         app = store_getter()
+        selector = ItemSelector(sqlite=app.sqlite)
+        candidates: list[Any]
+        if skill_id is not None:
+            # Manual "Review now" path: clamp the session to one item
+            # targeting exactly the requested skill, bypassing the
+            # weighted-sum scheduler. Asking for more than one item of
+            # the same skill is meaningless, so we ignore ``limit`` and
+            # use 1 — the button already sends ``?limit=1`` but other
+            # callers might not.
+            candidate = selector.select_one(skill_id)
+            if candidate is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"skill {skill_id!r} not found or not active",
+                )
+            candidates = [candidate]
+            limit = 1
+        else:
+            candidates = selector.select(limit=limit)
         session = create_session(
             app.sqlite, client=str(body.get("client", "web")), selected_count=limit
         )
-        selector = ItemSelector(sqlite=app.sqlite)
-        candidates = selector.select(limit=limit)
         if not candidates:
             return {"session_id": session.id, "items": []}
         candidate_rows = app.sqlite.conn.execute(
