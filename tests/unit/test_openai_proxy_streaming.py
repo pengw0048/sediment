@@ -423,3 +423,106 @@ def test_reassemble_openai_sse_tool_call_without_text_still_captures() -> None:
     )
     out = openai_proxy.reassemble_openai_sse(body, path="v1/chat/completions")
     assert out == '[tool_call lookup({"id": 42})]'
+
+
+def test_reassemble_with_tool_calls_returns_structured_records() -> None:
+    """The structured helper returns both the text-with-tail and a populated record list.
+
+    The text suffix stays around for human readers, but downstream
+    consumers should prefer the ``ToolCallRecord`` list.
+    """
+    body = (
+        b'data: {"choices": [{"delta": {"content": "I will look this up. "}}]}\n\n'
+        b'data: {"choices": [{"delta": {"tool_calls": ['
+        b'{"index": 0, "function": {"name": "get_weather", "arguments": "{\\"city\\":"}}]}}]}\n\n'
+        b'data: {"choices": [{"delta": {"tool_calls": ['
+        b'{"index": 0, "function": {"arguments": "\\"Tokyo\\"}"}}]}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    text, tool_calls = openai_proxy.reassemble_openai_sse_with_tool_calls(
+        body, path="v1/chat/completions"
+    )
+    # Text suffix preserved for human-readable evidence views.
+    assert '[tool_call get_weather({"city":"Tokyo"})]' in text
+    assert "I will look this up." in text
+    # Structured records carry the same info in parsed form.
+    assert len(tool_calls) == 1
+    assert tool_calls[0].name == "get_weather"
+    assert tool_calls[0].arguments == '{"city":"Tokyo"}'
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_openai_sse_tool_call_stream_populates_event_tool_calls_field(app: object) -> None:
+    """End-to-end: a tool_call SSE stream lands as a structured field on the event.
+
+    The captured evidence row's ``metadata_json`` carries a non-empty
+    ``tool_calls`` list, and the assistant turn's content still
+    includes the ``[tool_call …]`` human-readable suffix.
+    """
+    chunks = [
+        b'data: {"choices": [{"delta": {"content": "Checking. "}}]}\n\n',
+        (
+            b'data: {"choices": [{"delta": {"tool_calls": ['
+            b'{"index": 0, "function": {"name": "get_weather", "arguments": "{\\"city\\":"}}]}}]}\n\n'
+        ),
+        (
+            b'data: {"choices": [{"delta": {"tool_calls": ['
+            b'{"index": 0, "function": {"arguments": "\\"Tokyo\\"}"}}]}}]}\n\n'
+        ),
+        b"data: [DONE]\n\n",
+    ]
+
+    async def upstream_handler(request: httpx.Request) -> httpx.Response:
+        async def body() -> AsyncIterator[bytes]:
+            for chunk in chunks:
+                yield chunk
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream", "x-request-id": "tc-1"},
+            content=body(),
+        )
+
+    transport = httpx.MockTransport(upstream_handler)
+    factory, _ = _make_factory(transport)
+    proxy_app = openai_proxy.create_proxy_app(
+        lambda: app, upstream="https://api.example.com", client_factory=factory
+    )
+
+    payload = json.dumps(
+        {
+            "model": "gpt-test",
+            "stream": True,
+            "messages": [{"role": "user", "content": "weather?"}],
+        }
+    ).encode()
+
+    port = _free_port()
+    with _serve(proxy_app, port):
+
+        async def drive() -> None:
+            async with (
+                httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client,
+                client.stream(
+                    "POST",
+                    "/v1/chat/completions",
+                    content=payload,
+                    headers={"content-type": "application/json"},
+                    timeout=10.0,
+                ) as response,
+            ):
+                async for _ in response.aiter_bytes():
+                    pass
+
+        asyncio.run(drive())
+        rows = _wait_for_rows(app, expected=1)
+
+    assert len(rows) == 1
+    row = rows[0]
+    # Text suffix lives on the assistant turn (flattened into ``content``).
+    assert '[tool_call get_weather({"city":"Tokyo"})]' in row["content"]
+    # Structured records survive the round-trip through metadata_json.
+    metadata = json.loads(row["metadata_json"])
+    assert metadata.get("tool_calls"), "tool_calls must be a populated list"
+    assert metadata["tool_calls"][0]["name"] == "get_weather"
+    assert metadata["tool_calls"][0]["arguments"] == '{"city":"Tokyo"}'

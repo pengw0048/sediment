@@ -16,11 +16,24 @@
 //     card. Forwarded synchronously to the requested `path`; the
 //     reply body is returned to the caller (or `null` on any error or
 //     timeout, so the MAIN-world card fails open).
+//   * `pke_log` — diagnostic events (e.g. dead-DOM watchdog). We log to
+//     the service-worker console and keep the most recent entries in
+//     `chrome.storage.local` under `pkeLogs` for offline triage.
 
 const SERVER = "http://127.0.0.1:7421";
 const EVIDENCE_URL = `${SERVER}/api/v1/evidence`;
 const BUFFER_LIMIT = 200;
 const INTERVENTION_TIMEOUT_MS = 1000;
+const LOG_BUFFER_LIMIT = 50;
+
+async function appendLog(entry) {
+  // Diagnostic-only; we cap the buffer aggressively because these are
+  // visible from the popup / options UIs and we never want them to
+  // crowd out evidence payloads in storage.
+  const existing = await chrome.storage.local.get({ pkeLogs: [] });
+  const next = existing.pkeLogs.concat([entry]).slice(-LOG_BUFFER_LIMIT);
+  await chrome.storage.local.set({ pkeLogs: next });
+}
 
 async function bufferPayload(payload) {
   const existing = await chrome.storage.local.get({ pkeBuffer: [] });
@@ -94,6 +107,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
     // Returning true tells Chrome we'll call `sendResponse` async.
     return true;
+  }
+  if (message.kind === "pke_log") {
+    const entry = {
+      ts: Date.now(),
+      level: message.level || "info",
+      event: message.event,
+      detail: message.detail || {},
+    };
+    // Service-worker console always; storage is best-effort and never
+    // blocks the sender.
+    if (entry.level === "warn" || entry.level === "error") {
+      console.warn("[pke]", entry.event, entry.detail);
+    } else {
+      console.log("[pke]", entry.event, entry.detail);
+    }
+    void appendLog(entry);
+    return false;
   }
   return false;
 });

@@ -1,5 +1,5 @@
 // Sediment / PKE — conversation turn capture for ChatGPT, Claude.ai,
-// and Gemini, plus a ChatGPT-only pre-Send Socratic card.
+// and Gemini, plus a pre-Send Socratic card on all three sites.
 //
 // This script runs in the MAIN world so it can read the page's DOM and
 // observe React/Angular-rendered conversation turns. It detects each
@@ -10,15 +10,16 @@
 // the cross-origin POST to the local Sediment daemon at
 // http://127.0.0.1:7421/api/v1/evidence.
 //
-// On ChatGPT only, it also installs a capturing-phase Send
-// interceptor: when the user clicks `button[data-testid="send-button"]`
-// or presses Enter in the composer, we synchronously POST the draft to
-// `/api/v1/intervention/check`. If the local daemon green-lights an
-// intervention, we render an inline "AI 回答之前" Socratic card sitting
-// between the prompt input and the Send button; otherwise (and on any
-// error or > 1 s timeout) we transparently re-fire the original Send
-// so the user is never blocked on a local network failure. Claude.ai
-// and Gemini do not get the Send interceptor — only capture.
+// On every supported site we also install a capturing-phase Send
+// interceptor: when the user clicks the send button or presses Enter
+// in the composer, we synchronously POST the draft to
+// `/api/v1/intervention/check`. The server embeds the draft, looks for
+// an overlap with an existing skill node, and (if found) runs the gate
+// chain against that skill's real unaided_mastery. On a positive
+// response we render an inline "AI 回答之前" Socratic card between the
+// composer and Send button; otherwise (and on any error or > 1 s
+// timeout) we transparently re-fire the original Send so the user is
+// never blocked on a local network failure.
 //
 // Site detection: we pick exactly one site profile by matching
 // `location.href` against the entries in `SITE_PROFILES`. Each profile
@@ -67,6 +68,19 @@
   // All site DOM contracts. Keep this as the single source of truth so
   // future selector fixes have one editing point. Order matters only
   // when host patterns overlap (they don't today).
+  // Per-site Send selectors and composer hooks. Each profile owns:
+  //   sendSelector          — CSS for the Send button (click target)
+  //   enterTargetSelector   — CSS that matches the composer element
+  //                           receiving Enter-to-send (typically the
+  //                           same contenteditable we read the draft
+  //                           from)
+  //   promptTextExtractor   — () => string returning the current draft
+  //                           text from the composer (queried at
+  //                           click/Enter time, not cached)
+  //   fallbackTurnSelector  — secondary selector pair used purely for
+  //                           the "primary saw zero matches for 10 s"
+  //                           dead-DOM watchdog (logged to the
+  //                           background page, no behavior change)
   const SITE_PROFILES = [
     {
       id: "chatgpt",
@@ -81,6 +95,19 @@
         const m = p.match(/\/c\/([0-9a-f-]{8,})/i);
         return m ? m[1] : null;
       },
+      sendSelector: 'button[data-testid="send-button"]',
+      enterTargetSelector: 'form [contenteditable="true"]',
+      promptTextExtractor: () => {
+        const editor =
+          document.querySelector('form div.ProseMirror[contenteditable="true"]') ||
+          document.querySelector('form [contenteditable="true"]');
+        if (!editor) return "";
+        return (editor.innerText || editor.textContent || "").trim();
+      },
+      // Generic "any article-shaped turn" — if data-message-author-role
+      // disappears we want to know before the user does. Counts toward
+      // the dead-DOM warning, never used for capture.
+      fallbackTurnSelector: '[role="article"]',
     },
     {
       id: "claude_ai",
@@ -100,6 +127,26 @@
         const m = p.match(/\/chat\/([0-9a-f-]{8,})/i);
         return m ? m[1] : null;
       },
+      // Claude.ai's Send button carries `aria-label="Send Message"`;
+      // pair it with the form-wrapped contenteditable composer.
+      sendSelector:
+        'button[aria-label="Send Message"], button[aria-label="Send message"]',
+      enterTargetSelector:
+        'div[contenteditable="true"][role="textbox"], div.ProseMirror[contenteditable="true"]',
+      promptTextExtractor: () => {
+        const editor =
+          document.querySelector(
+            'div[contenteditable="true"][role="textbox"]',
+          ) ||
+          document.querySelector('div.ProseMirror[contenteditable="true"]') ||
+          document.querySelector('[contenteditable="true"]');
+        if (!editor) return "";
+        return (editor.innerText || editor.textContent || "").trim();
+      },
+      // Tailwind class names rot weekly; a generic "looks like a
+      // message div" fallback gives us a second eye on capture
+      // breakage.
+      fallbackTurnSelector: 'div[class*="message"]',
     },
     {
       id: "gemini",
@@ -121,6 +168,24 @@
         const m = p.match(/\/app\/([0-9a-f]{8,})/i);
         return m ? m[1] : null;
       },
+      // Gemini's send affordance is a Material icon button keyed by
+      // the `send` fonticon. Both Angular custom elements above and
+      // the rich-textarea composer are inside open shadow DOM, but the
+      // send button itself lives in light DOM and is queryable.
+      sendSelector:
+        'button[aria-label="Send message"], button:has(mat-icon[fonticon="send"])',
+      enterTargetSelector:
+        'rich-textarea [contenteditable="true"], div[contenteditable="true"]',
+      promptTextExtractor: () => {
+        const editor =
+          document.querySelector(
+            'rich-textarea [contenteditable="true"]',
+          ) ||
+          document.querySelector('div[contenteditable="true"]');
+        if (!editor) return "";
+        return (editor.innerText || editor.textContent || "").trim();
+      },
+      fallbackTurnSelector: 'div[class*="message"]',
     },
   ];
 
@@ -321,34 +386,69 @@
   inspectNode(document.documentElement);
 
   // ---------------------------------------------------------------
-  // Pre-Send Socratic intervention (ChatGPT only).
-  //
-  // The composer selectors and Send-button contract below
-  // (`button[data-testid="send-button"]`, ProseMirror contenteditable
-  // inside a `<form>`) are ChatGPT-specific. Claude.ai and Gemini have
-  // entirely different composer DOMs, so we early-return here and
-  // leave only the multi-site capture path armed on those sites.
+  // Dead-DOM watchdog. Sites mutate their data attributes regularly;
+  // when the primary selector finds zero matches we want to surface a
+  // warning before the user notices missing capture. Every 10 s we
+  // re-scan; if the primary selector has matched nothing the whole
+  // interval and the per-site `fallbackTurnSelector` does match at
+  // least one node, we log via the ISOLATED-world bridge so the
+  // background page can persist it.
+  if (PROFILE.fallbackTurnSelector) {
+    let consecutiveZeroIntervals = 0;
+    const watchdog = () => {
+      const primaryMatches =
+        document.querySelectorAll(
+          PROFILE.userSelector + ", " + PROFILE.assistantSelector,
+        ).length;
+      const fallbackMatches = document.querySelectorAll(
+        PROFILE.fallbackTurnSelector,
+      ).length;
+      if (primaryMatches === 0 && fallbackMatches > 0) {
+        consecutiveZeroIntervals += 1;
+        if (consecutiveZeroIntervals === 1) {
+          // Fire once per dead-DOM window so we don't spam the log.
+          window.postMessage(
+            {
+              __pke_log__: true,
+              level: "warn",
+              event: "pke_selector_dead",
+              site: PROFILE.id,
+              primary: PROFILE.userSelector + " | " + PROFILE.assistantSelector,
+              fallbackMatches,
+              url: location.href,
+            },
+            window.location.origin,
+          );
+        }
+      } else if (primaryMatches > 0) {
+        consecutiveZeroIntervals = 0;
+      }
+    };
+    setInterval(watchdog, 10000);
+  }
+
+  // ---------------------------------------------------------------
+  // Pre-Send Socratic intervention (all supported sites).
   //
   // Flow:
-  //   1. Capturing-phase listeners on document for `click` on
-  //      `button[data-testid="send-button"]` and `keydown` on the
-  //      composer detect a Send attempt before React's synthetic
+  //   1. Capturing-phase listeners on document for `click` on the
+  //      site's send button and `keydown` on the composer's
+  //      contenteditable detect a Send attempt before the host page's
   //      handler fires.
   //   2. We mark the event so a re-dispatched copy bypasses us, then
   //      `preventDefault` + `stopPropagation` to swallow the original.
-  //   3. We synchronously POST the draft to /api/v1/intervention/check.
-  //      Any non-2xx, network error, or > 1 s timeout falls open: we
+  //   3. We synchronously POST the draft text to
+  //      `/api/v1/intervention/check`. The server embeds it and tries
+  //      to resolve it to a real skill node so the per-skill throttle
+  //      and the real unaided_mastery drive the gate chain. Any
+  //      non-2xx, network error, or > 1 s timeout falls open: we
   //      re-fire Send immediately so the user is never blocked on
   //      local-daemon trouble.
   //   4. On `{intervene: true}` we render an inline card between the
   //      composer and Send button. "跳过" fires `outcome=dismissed`
   //      then re-fires Send; "回答 (约 10 秒)" fires `outcome=engaged`
   //      with the typed response then re-fires Send.
-  //
-  // Skill resolution is deliberately punted for v1: we send
-  // `skill_label="unknown"` and rely on the server's per-source
-  // dismiss/daily-cap counters to keep the card from over-firing.
-  if (PROFILE.id !== "chatgpt") return;
+  if (!PROFILE.sendSelector || !PROFILE.enterTargetSelector) return;
 
   const SOURCE = PROFILE.source;
   const CHECK_TIMEOUT_MS = 1000;
@@ -400,24 +500,13 @@
     });
   }
 
-  function getComposerEditor() {
-    // ChatGPT renders the composer as a ProseMirror contenteditable.
-    // Prefer the ProseMirror node; fall back to any contenteditable
-    // descendant of the composer form if the class name moves.
-    return (
-      document.querySelector('form div.ProseMirror[contenteditable="true"]') ||
-      document.querySelector('form [contenteditable="true"]')
-    );
-  }
-
   function getSendButton() {
-    return document.querySelector('button[data-testid="send-button"]');
+    return document.querySelector(PROFILE.sendSelector);
   }
 
   function readDraftText() {
-    const editor = getComposerEditor();
-    if (!editor) return "";
-    const text = (editor.innerText || editor.textContent || "").trim();
+    const raw = PROFILE.promptTextExtractor ? PROFILE.promptTextExtractor() : "";
+    const text = (raw || "").trim();
     return text.length > MAX_TURN_CHARS ? text.slice(0, MAX_TURN_CHARS) : text;
   }
 
@@ -441,10 +530,13 @@
       "/api/v1/intervention/check",
       {
         source: SOURCE,
-        // v1: skip skill resolution — the server falls back to
-        // "unknown" / "this skill" defaults, and the dismiss-cap
-        // gating still works on per-source counters.
-        skill_label: "unknown",
+        // Server-side: embed the draft, look for an overlap with an
+        // existing skill node, and run the gate chain against THAT
+        // skill_id (with its real unaided_mastery from
+        // skill_mastery_state). On no match the server returns
+        // intervene=false rather than firing the card on an ungrounded
+        // "unknown" skill.
+        prompt_text: draftText,
         context_summary: draftText.slice(0, 2000),
       },
       CHECK_TIMEOUT_MS,
@@ -609,18 +701,18 @@
     return card;
   }
 
-  // Mount the card between the chat transcript and the composer.
-  // ChatGPT wraps the composer in a `<form>`; we insert the card as
-  // its immediate previous sibling so it sits visually above the
-  // prompt input and the Send button while still being part of the
-  // composer region (and therefore moves with the input on layout
-  // changes).
+  // Mount the card just above the composer. We pick the nearest
+  // ancestor that anchors the composer in layout (a `<form>` on
+  // ChatGPT, the form-like wrapper on Claude.ai, the rich-textarea
+  // host on Gemini) and insert the card as its previous sibling so it
+  // moves with the composer on resize.
   function mountCard(payload) {
     removeCard();
     const button = getSendButton();
-    const form = button ? button.closest("form") : null;
-    const editor = getComposerEditor();
-    const host = form || (editor && editor.closest("form"));
+    const editor = document.querySelector(PROFILE.enterTargetSelector);
+    const fromButton = button ? button.closest("form") || button.parentElement : null;
+    const fromEditor = editor ? editor.closest("form") || editor.parentElement : null;
+    const host = fromButton || fromEditor;
     if (!host || !host.parentNode) return false;
     const card = buildCard(payload);
     host.parentNode.insertBefore(card, host);
@@ -665,7 +757,7 @@
   function onSendClickCapture(event) {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
-    const button = target.closest('button[data-testid="send-button"]');
+    const button = target.closest(PROFILE.sendSelector);
     if (!button) return;
     void handleSendAttempt(event);
   }
@@ -675,7 +767,7 @@
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
     // Only intercept keydown inside the composer's contenteditable.
-    if (!target.closest('form [contenteditable="true"]')) return;
+    if (!target.closest(PROFILE.enterTargetSelector)) return;
     void handleSendAttempt(event);
   }
 

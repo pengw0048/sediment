@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 
 from pke.identity.ann_index import AnnIndex
+from pke.identity.audit_reasons import AuditReason
 from pke.identity.embedder import Embedder
 from pke.identity.resolver import IdentityResolver
 
@@ -96,7 +97,7 @@ def test_new_or_blocked_writes_leaky_bucket_audit(app):
         "SELECT payload_json FROM pending_audits WHERE audit_type = 'candidate_review'"
     ).fetchall()
     reasons = [json.loads(r["payload_json"]).get("reason") for r in rows]
-    assert "leaky_bucket_block" in reasons
+    assert AuditReason.LEAKY_BUCKET_BLOCK.value in reasons
 
 
 def test_create_skill_cap_zero_disables_the_bucket(app):

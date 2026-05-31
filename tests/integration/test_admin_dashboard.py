@@ -238,6 +238,94 @@ async def test_admin_dashboard_renders_cost_bars(web_client) -> None:
     assert "cost-legend" in body
 
 
+async def test_admin_charts_have_a11y_aria_label_and_desc(web_client) -> None:
+    """Each rendered chart SVG carries role=img, a human aria-label, and a <desc>.
+
+    Screen readers fall back to ``<desc>`` for SVG content that the
+    ``aria-label`` alone cannot summarize, so both must be present and
+    non-empty. We assert the rendered text mentions the current value
+    and band so the description tracks the visual state.
+    """
+    import re
+
+    client, app = web_client
+    # Seed enough data that all three charts render.
+    _seed_metric_series(
+        app,
+        metric_name=METRIC_CENTROID_COUNT,
+        values=[10_000.0 + 500.0 * i for i in range(10)],
+    )
+    _seed_metric_series(
+        app, metric_name=METRIC_ARI_WEEK, values=[0.80, 0.78, 0.76], days_apart=7
+    )
+    record_metric(app.sqlite, metric_name=METRIC_LLM_COST_30D, value=12.34)
+    _insert_llm_call(app, provider="anthropic", cost_usd=0.10, days_ago=0)
+
+    response = await client.get("/admin")
+    assert response.status_code == 200
+    body = response.text
+
+    # Every chart SVG carries role="img" and a non-empty aria-label.
+    svg_pattern = re.compile(
+        r'<svg\b[^>]*\brole="img"[^>]*\baria-label="([^"]+)"', re.DOTALL
+    )
+    labels = svg_pattern.findall(body)
+    # Three charts (centroid sparkline, ARI sparkline, cost bars) when
+    # all three tiles have data.
+    assert len(labels) == 3, f"expected 3 chart SVGs with aria-label, found {len(labels)}"
+    for label in labels:
+        assert label.strip(), "aria-label must not be empty"
+
+    # Each chart embeds a <desc> tag for screen-reader fallback content.
+    desc_pattern = re.compile(r"<desc>([^<]+)</desc>")
+    descs = desc_pattern.findall(body)
+    assert len(descs) == 3, f"expected 3 <desc> tags, found {len(descs)}"
+    for desc in descs:
+        assert desc.strip(), "<desc> body must not be empty"
+
+    # The descriptions track the chart state: a band word appears in each.
+    bands_seen = {b for desc in descs for b in ("green", "yellow", "red") if b in desc}
+    assert bands_seen, "at least one description must mention a band"
+
+
+async def test_drift_history_rejects_out_of_bounds_windows(web_client) -> None:
+    """Out-of-range window params produce 422; in-range custom windows return that many points.
+
+    The bounds (1-365 for days, 1-52 for weeks) are FastAPI ``Query``
+    constraints, so the response status is 422 rather than 400.
+    """
+    client, app = web_client
+
+    # Each combination here individually violates one bound; the other
+    # two params are left at their valid defaults.
+    for bad in [
+        {"centroid_days": 0},
+        {"centroid_days": 366},
+        {"ari_weeks": 0},
+        {"ari_weeks": 53},
+        {"cost_days": 0},
+        {"cost_days": 366},
+    ]:
+        response = await client.get("/api/v1/admin/drift/history", params=bad)
+        assert response.status_code == 422, f"expected 422 for {bad}, got {response.status_code}"
+
+    # Custom in-range windows: cost_days=7 truncates the cost bucket
+    # list to exactly 7 days. We don't need to seed more centroid/ARI
+    # data — the endpoint must return at most the requested window.
+    _insert_llm_call(app, provider="anthropic", cost_usd=0.30, days_ago=0)
+    response = await client.get(
+        "/api/v1/admin/drift/history",
+        params={"centroid_days": 5, "ari_weeks": 4, "cost_days": 7},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["llm_cost_30d"]) == 7
+    # Centroid / ARI series respect their custom limits — DB has no data
+    # so the lists are empty, but the response must still be well-formed.
+    assert isinstance(data["centroid_count"], list)
+    assert isinstance(data["ari_week"], list)
+
+
 async def test_drift_history_endpoint_returns_series(web_client) -> None:
     """GET /api/v1/admin/drift/history returns per-metric series JSON."""
     client, app = web_client

@@ -29,9 +29,11 @@
         {% set vrange = (vmax - vmin) if (vmax - vmin) > 0 else 1.0 %}
         {% set n = vals | length %}
         {% set step = (svg_w / (n - 1)) if n > 1 else 0 %}
+        {% set centroid_aria = "Centroid count over the last " ~ n ~ " days, currently " ~ "{:,.0f}".format(tile.latest.value) ~ ", in the " ~ tile.band ~ " band." %}
         <svg class="sparkline" viewBox="0 0 {{ svg_w }} {{ svg_h }}"
              preserveAspectRatio="none" role="img"
-             aria-label="centroid count last {{ n }} samples">
+             aria-label="{{ centroid_aria }}">
+          <desc>{{ centroid_aria }}</desc>
           <polyline
             fill="none"
             stroke="currentColor"
@@ -64,9 +66,11 @@
         {% set vals = tile.series | map(attribute='value') | list %}
         {% set n = vals | length %}
         {% set step = (svg_w / (n - 1)) if n > 1 else 0 %}
+        {% set ari_aria = "Weekly ARI over the last " ~ n ~ " weeks, currently " ~ "%.2f"|format(tile.latest.value) ~ ", in the " ~ tile.band ~ " band." %}
         <svg class="sparkline" viewBox="0 0 {{ svg_w }} {{ svg_h }}"
              preserveAspectRatio="none" role="img"
-             aria-label="ARI last {{ n }} weeks">
+             aria-label="{{ ari_aria }}">
+          <desc>{{ ari_aria }}</desc>
           <polyline
             fill="none"
             stroke="currentColor"
@@ -107,9 +111,11 @@
           {% if tns.total > ns.vmax %}{% set ns.vmax = tns.total %}{% endif %}
         {% endfor %}
         {% set vmax = ns.vmax if ns.vmax > 0 else 1.0 %}
+        {% set cost_aria = "Daily LLM cost stacked by provider over the last " ~ n ~ " days, currently $" ~ "%.2f"|format(tile.latest.value) ~ " over the 30-day window, in the " ~ tile.band ~ " band." if tile.latest else "Daily LLM cost stacked by provider over the last " ~ n ~ " days, in the " ~ tile.band ~ " band." %}
         <svg class="cost-bars" viewBox="0 0 {{ svg_w }} {{ bar_h }}"
              preserveAspectRatio="none" role="img"
-             aria-label="daily LLM cost stacked by provider, last {{ n }} days">
+             aria-label="{{ cost_aria }}">
+          <desc>{{ cost_aria }}</desc>
           {% for day in tile.daily %}
             {% set x = loop.index0 * (bar_w + bar_gap) %}
             {% set y_ns = namespace(y=bar_h) %}

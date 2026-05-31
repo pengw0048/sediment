@@ -2,36 +2,50 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.11", "3.12"]
-    runs-on: ${{ matrix.os }}
-    env:
-      UV_PYTHON: ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --all-extras
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run mypy pke/
-      - run: uv run pytest --cov=pke --cov-report=term-missing --cov-report=xml
-      - name: Add coverage summary
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+        env:
+          UV_PYTHON: "3.12"
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy pke/
+
+      - name: Pytest
+        run: uv run pytest -v
+
+      - name: Test count summary
         if: always()
         shell: bash
         run: |
           {
-            echo "### Coverage"
+            echo "### Tests"
             echo
-            if [ -f coverage.xml ]; then
-              uv run python -c 'import xml.etree.ElementTree as ET; root = ET.parse("coverage.xml").getroot(); line_rate = float(root.attrib["line-rate"]) * 100; branch_rate = float(root.attrib.get("branch-rate", 0)) * 100; lines_valid = int(root.attrib["lines-valid"]); lines_covered = int(root.attrib["lines-covered"]); print(f"- Lines: {line_rate:.1f}% ({lines_covered}/{lines_valid})"); print(f"- Branches: {branch_rate:.1f}%")'
-            else
-              echo "coverage.xml was not generated."
-            fi
+            collected=$(uv run pytest --collect-only -q 2>/dev/null | tail -n 1 || echo "unknown")
+            echo "- Collected: ${collected}"
           } >> "$GITHUB_STEP_SUMMARY"

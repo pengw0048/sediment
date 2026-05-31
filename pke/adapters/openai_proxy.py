@@ -31,6 +31,7 @@ from pke.evidence.models import (
     EvidenceModality,
     EvidenceRole,
     EvidenceTurn,
+    ToolCallRecord,
     sha256_hex,
     utc_now,
 )
@@ -47,9 +48,20 @@ _HOP_BY_HOP_HEADERS = {
 
 
 def event_from_openai_request_response(
-    *, request_body: dict[str, Any], response_text: str, request_id: str | None = None
+    *,
+    request_body: dict[str, Any],
+    response_text: str,
+    request_id: str | None = None,
+    tool_calls: list[ToolCallRecord] | None = None,
 ) -> EvidenceEvent:
-    """Build evidence from an OpenAI chat/responses request and response text."""
+    """Build evidence from an OpenAI chat/responses request and response text.
+
+    ``tool_calls``, when provided, becomes the structured record of any
+    function/tool calls the assistant emitted. ``response_text`` may
+    additionally carry a human-readable ``[tool_call name(args)]`` tail
+    so existing string-only consumers (CLI dumps, debug logs) keep
+    working, but the structured field is the primary source.
+    """
     messages = request_body.get("messages", [])
     user_content = ""
     if isinstance(messages, list):
@@ -81,11 +93,19 @@ def event_from_openai_request_response(
         ],
         app="openai_api",
         model=str(request_body.get("model")) if request_body.get("model") else None,
+        tool_calls=list(tool_calls) if tool_calls else [],
     )
 
 
-def reassemble_openai_sse(raw_body: bytes, *, path: str) -> str:
-    """Concatenate text fragments out of an OpenAI SSE response body.
+def reassemble_openai_sse_with_tool_calls(
+    raw_body: bytes, *, path: str
+) -> tuple[str, list[ToolCallRecord]]:
+    """Concatenate SSE text fragments and reassemble any tool-call deltas.
+
+    Returns ``(body_text, tool_calls)``. ``body_text`` is the
+    user-visible text with a ``[tool_call name(arguments)]`` tail
+    appended for human-readable evidence views; ``tool_calls`` is the
+    structured list of records that downstream consumers should prefer.
 
     ``path`` selects the event taxonomy:
 
@@ -98,12 +118,6 @@ def reassemble_openai_sse(raw_body: bytes, *, path: str) -> str:
       ``response.output_item.added`` (carrying a function ``name``)
       with ``response.function_call_arguments.delta`` (carrying the
       JSON-string arguments fragment) for tool calls.
-
-    Tool-call deltas are reassembled into a compact
-    ``[tool_call name(arguments)]`` line appended after the body
-    text so evidence captures sessions where the model emitted only
-    a function call (no plain text), which the old reassembler
-    silently dropped.
 
     Lines that don't begin with ``data:``, the ``[DONE]`` sentinel,
     and JSON that fails to parse are skipped — the goal is best-effort
@@ -192,17 +206,37 @@ def reassemble_openai_sse(raw_body: bytes, *, path: str) -> str:
                         if isinstance(args, str):
                             bucket["arguments"] += args
     body = "".join(text_parts)
+    tool_call_records: list[ToolCallRecord] = []
     if tool_parts:
         # Sort slots deterministically; chat-completions uses ints,
         # responses uses ints or strings, so coerce both to str for
         # a stable order.
+        ordered_slots = sorted(tool_parts, key=lambda k: str(k))
+        for slot in ordered_slots:
+            bucket = tool_parts[slot]
+            tool_call_records.append(
+                ToolCallRecord(
+                    name=bucket.get("name") or "?",
+                    arguments=bucket.get("arguments") or "",
+                )
+            )
         tail = "".join(
-            f"\n[tool_call {tool_parts[slot].get('name') or '?'}"
-            f"({tool_parts[slot].get('arguments') or ''})]"
-            for slot in sorted(tool_parts, key=lambda k: str(k))
+            f"\n[tool_call {tc.name}({tc.arguments})]" for tc in tool_call_records
         )
         body = body + tail if body else tail.lstrip("\n")
-    return body
+    return body, tool_call_records
+
+
+def reassemble_openai_sse(raw_body: bytes, *, path: str) -> str:
+    """Backward-compatible wrapper returning only the body text.
+
+    The structured tool-call list is the primary source for evidence
+    capture, but the legacy string-returning entry point is kept for
+    direct unit tests and CLI debug paths that only want the
+    human-readable concatenation.
+    """
+    text, _tool_calls = reassemble_openai_sse_with_tool_calls(raw_body, path=path)
+    return text
 
 
 def create_proxy_app(
@@ -248,8 +282,11 @@ def create_proxy_app(
             request_json = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return
+        tool_calls: list[ToolCallRecord] = []
         if is_sse:
-            response_text = reassemble_openai_sse(response_bytes, path=path)
+            response_text, tool_calls = reassemble_openai_sse_with_tool_calls(
+                response_bytes, path=path
+            )
         else:
             try:
                 response_text = response_bytes.decode("utf-8")
@@ -259,6 +296,7 @@ def create_proxy_app(
             request_body=request_json,
             response_text=response_text,
             request_id=request_id,
+            tool_calls=tool_calls,
         )
         store_getter().evidence.add(event)
 

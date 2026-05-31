@@ -6,12 +6,20 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from pke.identity.embedder import Embedder
 from pke.intervention.decider import PersistentInterventionDecider
+from pke.intervention.skill_resolver import resolve_prompt_to_skill
 from pke.intervention.state import InterventionStateStore
 from pke.intervention.strength import StrengthLevel
 from pke.intervention.toast import toast_payload
 
 _VALID_OUTCOMES = {"shown", "dismissed", "engaged", "bypassed"}
+
+# Module-level embedder so the sentence-transformers model (or its hash
+# fallback) is loaded once per process. /check is on the user's Send hot
+# path; constructing a fresh Embedder on every request would add tens of
+# milliseconds even for the in-memory variant.
+_EMBEDDER = Embedder()
 
 
 def router(store_getter: Any) -> APIRouter:
@@ -25,13 +33,38 @@ def router(store_getter: Any) -> APIRouter:
             sqlite=app.sqlite,
             llm_client=getattr(app, "llm_client", None),
         )
+
+        # If the extension shipped the user's draft, try to resolve it to
+        # a real skill node so the per-skill gate (gentle_every_n) and
+        # the real unaided_mastery drive the decision. If nothing
+        # matches above threshold we treat the prompt as a new topic and
+        # return intervene=false rather than firing the card on an
+        # ungrounded "unknown" skill — that's noisier than useful.
+        prompt_text = payload.get("prompt_text")
+        skill_id = payload.get("skill_id")
+        skill_label = payload.get("skill_label")
+        unaided_mastery_raw = payload.get("unaided_mastery")
+
+        if isinstance(prompt_text, str) and prompt_text.strip() and not skill_id:
+            match = resolve_prompt_to_skill(
+                sqlite=app.sqlite,
+                embedder=_EMBEDDER,
+                prompt_text=prompt_text,
+            )
+            if match is None:
+                return {"intervene": False}
+            skill_id = match.skill_id
+            skill_label = match.skill_label
+            if unaided_mastery_raw is None:
+                unaided_mastery_raw = match.unaided_mastery
+
         intervention = await decider.should_intervene_async(
             source=str(payload.get("source", "browser_ext")),
-            skill_id=str(payload.get("skill_id", "unknown")),
-            skill_label=str(payload.get("skill_label", "this skill")),
-            unaided_mastery=float(payload.get("unaided_mastery", 0.5)),
+            skill_id=str(skill_id or "unknown"),
+            skill_label=str(skill_label or "this skill"),
+            unaided_mastery=float(unaided_mastery_raw if unaided_mastery_raw is not None else 0.5),
             task_type=str(payload.get("task_type", "learn")),
-            context_summary=payload.get("context_summary"),
+            context_summary=payload.get("context_summary") or prompt_text,
         )
         if intervention is None:
             return {"intervene": False}

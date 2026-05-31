@@ -15,6 +15,7 @@ from pke.extraction.llm_client import LLMClient
 from pke.extraction.prompts import render as render_prompt
 from pke.extraction.schema import clamp01
 from pke.identity.ann_index import AnnIndex
+from pke.identity.audit_reasons import AuditReason
 from pke.identity.denstream_online import OnlineClusterer
 from pke.identity.embedder import Embedder
 
@@ -415,7 +416,7 @@ class IdentityResolver:
                         "candidate_description": candidate_desc,
                         "nearest_skill_id": nearest_id,
                         "cosine": nearest_sim,
-                        "reason": "leaky_bucket_block",
+                        "reason": AuditReason.LEAKY_BUCKET_BLOCK.value,
                         "daily_new_skill_cap": self.daily_new_skill_cap,
                     }
                 ),
