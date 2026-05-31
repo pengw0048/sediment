@@ -27,6 +27,7 @@ _SOURCE_PRIORITY = {
     "claude_code_tail": 1,
     "cursor_tail": 1,
     "browser_ext": 2,
+    "browser_ext_chatgpt": 2,
     "openai_proxy": 3,
     "anthropic_proxy": 3,
     "chatgpt_history": 4,
