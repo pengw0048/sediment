@@ -1,15 +1,13 @@
 {
   "manifest_version": 3,
   "name": "PKE - Personal Knowledge Engine",
-  "version": "0.1.0",
-  "description": "Capture your own AI conversations to your local PKE.",
+  "version": "0.2.0",
+  "description": "Capture your own ChatGPT conversations to your local Sediment daemon.",
   "minimum_chrome_version": "120",
-  "permissions": ["storage", "scripting"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://chat.openai.com/*",
     "https://chatgpt.com/*",
-    "https://claude.ai/*",
-    "https://gemini.google.com/*",
     "http://127.0.0.1:7421/*"
   ],
   "background": {
@@ -20,24 +18,20 @@
     {
       "matches": [
         "https://chat.openai.com/*",
-        "https://chatgpt.com/*",
-        "https://claude.ai/*",
-        "https://gemini.google.com/*"
+        "https://chatgpt.com/*"
       ],
       "js": ["content-main.js"],
       "world": "MAIN",
-      "run_at": "document_start"
+      "run_at": "document_idle"
     },
     {
       "matches": [
         "https://chat.openai.com/*",
-        "https://chatgpt.com/*",
-        "https://claude.ai/*",
-        "https://gemini.google.com/*"
+        "https://chatgpt.com/*"
       ],
       "js": ["content-isolated.js"],
       "world": "ISOLATED",
-      "run_at": "document_start"
+      "run_at": "document_idle"
     }
   ],
   "action": {

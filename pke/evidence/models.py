@@ -22,6 +22,7 @@ VALID_SOURCES = {
     "claude_code_tail",
     "cursor_tail",
     "browser_ext",
+    "browser_ext_chatgpt",
     "chatgpt_history",
     "claude_ai_history",
     "openai_proxy",
