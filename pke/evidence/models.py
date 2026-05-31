@@ -23,6 +23,8 @@ VALID_SOURCES = {
     "cursor_tail",
     "browser_ext",
     "browser_ext_chatgpt",
+    "browser_ext_claude_ai",
+    "browser_ext_gemini",
     "chatgpt_history",
     "claude_ai_history",
     "openai_proxy",

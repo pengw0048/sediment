@@ -28,6 +28,8 @@ _SOURCE_PRIORITY = {
     "cursor_tail": 1,
     "browser_ext": 2,
     "browser_ext_chatgpt": 2,
+    "browser_ext_claude_ai": 2,
+    "browser_ext_gemini": 2,
     "openai_proxy": 3,
     "anthropic_proxy": 3,
     "chatgpt_history": 4,
