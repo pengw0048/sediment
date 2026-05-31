@@ -100,4 +100,66 @@ def sum_cost_usd(sqlite: SQLiteStore, *, days: int) -> float:
     return float(row["total"] or 0.0)
 
 
-__all__ = ["PRICING", "cost_usd_for", "log_llm_call", "sum_cost_usd"]
+# Providers we stack independently in the admin dashboard cost bar chart.
+# Anything else (e.g. an unknown provider name) is folded into "local"
+# in :func:`daily_cost_by_provider` so the stacked bars stay a fixed
+# three-segment shape regardless of what gets logged.
+COST_PROVIDERS: tuple[str, ...] = ("anthropic", "openai", "local")
+
+
+def daily_cost_by_provider(
+    sqlite: SQLiteStore, *, days: int
+) -> list[dict[str, float | str]]:
+    """Return per-day cost broken out by provider for the last ``days`` days.
+
+    Each entry is ``{"day": "YYYY-MM-DD", "anthropic": float, "openai":
+    float, "local": float}``. Days with no logged calls are still
+    emitted with all-zero provider buckets so the front-end can render
+    an evenly-spaced bar chart without gaps. Providers not in
+    :data:`COST_PROVIDERS` are folded into ``local``.
+    """
+    rows = sqlite.conn.execute(
+        f"""
+        SELECT
+          DATE(called_at) AS day,
+          provider,
+          COALESCE(SUM(cost_usd), 0.0) AS cost
+        FROM llm_call_log
+        WHERE called_at >= datetime('now', '-{int(days)} days')
+        GROUP BY day, provider
+        """,
+    ).fetchall()
+    # Build a sparse {day: {provider: cost}} table, then fill in all
+    # days in the [now - days, now] window so the bar chart x-axis is
+    # uniform even when most days have zero traffic.
+    from datetime import UTC, datetime, timedelta
+
+    sparse: dict[str, dict[str, float]] = {}
+    for row in rows:
+        day = str(row["day"])
+        provider = str(row["provider"])
+        if provider not in COST_PROVIDERS:
+            provider = "local"
+        bucket = sparse.setdefault(day, {p: 0.0 for p in COST_PROVIDERS})
+        bucket[provider] = bucket.get(provider, 0.0) + float(row["cost"] or 0.0)
+
+    today = datetime.now(tz=UTC).date()
+    out: list[dict[str, float | str]] = []
+    for i in range(int(days) - 1, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        bucket = sparse.get(d, {p: 0.0 for p in COST_PROVIDERS})
+        entry: dict[str, float | str] = {"day": d}
+        for p in COST_PROVIDERS:
+            entry[p] = float(bucket.get(p, 0.0))
+        out.append(entry)
+    return out
+
+
+__all__ = [
+    "COST_PROVIDERS",
+    "PRICING",
+    "cost_usd_for",
+    "daily_cost_by_provider",
+    "log_llm_call",
+    "sum_cost_usd",
+]

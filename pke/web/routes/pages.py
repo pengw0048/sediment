@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
 
 from pke.mastery.selector import ItemSelector
+from pke.quality.metrics import MetricSnapshot
 from pke.web.deps import templates
 
 # Rough cost of a single review item. Used to render the dashboard's
@@ -53,6 +54,32 @@ SLIPPAGE_SCORE_SQL = (
     "+ MIN(COALESCE(m.unaided_lapses, 0), 10) / 10.0 * 0.2 "
     "+ MIN(COALESCE(m.outsource_count_7d, 0), 10) / 10.0 * 0.2"
 )
+
+
+def _tile_context(
+    latest: MetricSnapshot | None,
+    series: list[MetricSnapshot],
+    *,
+    want_points: int,
+) -> dict[str, Any]:
+    """Build the per-tile template context for the admin dashboard.
+
+    Returns the latest snapshot, the band-class string (or "no_data"),
+    and a list of ``(value, band)`` pairs ready for the inline SVG
+    polyline/markers. ``want_points`` is informational — we don't pad
+    short series; the template scales whatever is available to the
+    full viewBox width.
+    """
+    points: list[dict[str, Any]] = [
+        {"value": s.value, "band": s.band.value, "recorded_at": s.recorded_at}
+        for s in series
+    ]
+    return {
+        "latest": latest,
+        "band": latest.band.value if latest else "no_data",
+        "series": points,
+        "want_points": want_points,
+    }
 
 
 def _fetch_skills(app: Any, *, sort: str) -> list[dict[str, Any]]:
@@ -208,13 +235,55 @@ def router(store_getter: Any) -> APIRouter:
 
     @api.get("/admin")
     async def admin(request: Request):
-        rows = (
-            store_getter()
-            .sqlite.conn.execute("SELECT * FROM quality_metrics ORDER BY recorded_at DESC LIMIT 50")
-            .fetchall()
+        from pke.quality.llm_log import COST_PROVIDERS, daily_cost_by_provider
+        from pke.quality.metrics import (
+            METRIC_ARI_WEEK,
+            METRIC_CENTROID_COUNT,
+            METRIC_LLM_COST_30D,
+            latest_metric,
+            metric_series,
         )
+        from pke.web.routes.api_admin import (
+            ARI_HISTORY_POINTS,
+            CENTROID_HISTORY_POINTS,
+            COST_HISTORY_DAYS,
+        )
+
+        app = store_getter()
+        # Latest snapshot per tracked metric drives the headline number
+        # and band class on each tile. Missing metrics render as the
+        # "no_data" tile state (greyed out, dash placeholder).
+        centroid_latest = latest_metric(app.sqlite, metric_name=METRIC_CENTROID_COUNT)
+        ari_latest = latest_metric(app.sqlite, metric_name=METRIC_ARI_WEEK)
+        cost_latest = latest_metric(app.sqlite, metric_name=METRIC_LLM_COST_30D)
+
+        centroid_series = metric_series(
+            app.sqlite,
+            metric_name=METRIC_CENTROID_COUNT,
+            limit=CENTROID_HISTORY_POINTS,
+        )
+        ari_series = metric_series(
+            app.sqlite, metric_name=METRIC_ARI_WEEK, limit=ARI_HISTORY_POINTS
+        )
+        cost_daily = daily_cost_by_provider(app.sqlite, days=COST_HISTORY_DAYS)
+
         return templates.TemplateResponse(
-            request, "admin.html", {"rows": [dict(row) for row in rows]}
+            request,
+            "admin.html",
+            {
+                "centroid": _tile_context(
+                    centroid_latest, centroid_series, want_points=CENTROID_HISTORY_POINTS
+                ),
+                "ari": _tile_context(
+                    ari_latest, ari_series, want_points=ARI_HISTORY_POINTS
+                ),
+                "cost": {
+                    "latest": cost_latest,
+                    "band": cost_latest.band.value if cost_latest else "no_data",
+                    "daily": cost_daily,
+                    "providers": COST_PROVIDERS,
+                },
+            },
         )
 
     return api

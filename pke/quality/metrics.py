@@ -60,6 +60,48 @@ def record_metric(
     return metric_id
 
 
+def metric_series(
+    sqlite: SQLiteStore, *, metric_name: str, limit: int
+) -> list[MetricSnapshot]:
+    """Return the ``limit`` most recent snapshots in chronological (oldest→newest) order.
+
+    The query orders ``DESC`` by ``recorded_at`` + ``rowid`` (same
+    tiebreak as :func:`latest_metric`) so it can use the
+    ``idx_quality_metric`` index, then we reverse in Python so callers
+    get a left-to-right time series suitable for plotting.
+    """
+    rows = sqlite.conn.execute(
+        """
+        SELECT metric_name, value, payload_json, recorded_at
+        FROM quality_metrics
+        WHERE metric_name = ?
+        ORDER BY recorded_at DESC, rowid DESC
+        LIMIT ?
+        """,
+        (metric_name, int(limit)),
+    ).fetchall()
+    snapshots: list[MetricSnapshot] = []
+    for row in rows:
+        payload_raw = row["payload_json"] or "{}"
+        try:
+            payload = json.loads(str(payload_raw))
+        except json.JSONDecodeError:
+            payload = {}
+        value = float(row["value"] or 0.0)
+        name = str(row["metric_name"])
+        snapshots.append(
+            MetricSnapshot(
+                metric_name=name,
+                value=value,
+                band=band_for(name, value),
+                recorded_at=str(row["recorded_at"]),
+                payload=payload,
+            )
+        )
+    snapshots.reverse()
+    return snapshots
+
+
 def latest_metric(sqlite: SQLiteStore, *, metric_name: str) -> MetricSnapshot | None:
     """Return the most recent snapshot for ``metric_name`` (or ``None``).
 

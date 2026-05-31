@@ -26,6 +26,7 @@ from pke.quality.metrics import (
     MetricSnapshot,
     band_for,
     latest_metric,
+    metric_series,
     record_metric,
 )
 
@@ -34,5 +35,6 @@ __all__ = [
     "MetricSnapshot",
     "band_for",
     "latest_metric",
+    "metric_series",
     "record_metric",
 ]
